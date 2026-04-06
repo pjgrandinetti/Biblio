@@ -1,0 +1,25 @@
+{
+    "_comment": "Proper names to protect capitalization in BibTeX titles. Supports regex patterns.",
+    "physics": [
+        "Fock", "Dirac", "Hartree", "Fermi", "Bose", "Einstein", "Schr[öo]dinger", "Heisenberg",
+        "Pauli", "Maxwell", "Boltzmann", "Planck", "Newton", "Lorentz", "Zeeman", "Stark",
+        "Raman", "Brillouin", "Debye", "Wigner", "Bloch", "Floquet", "Landau", "Bohr",
+        "Born", "Oppenheimer", "Slater", "Kohn", "Sham", "Hund", "Jahn", "Teller",
+        "Curie", "Weiss", "Ising", "Hubbard", "Anderson", "Mott", "Peierls"
+    ],
+    "mathematics": [
+        "Euler", "Fourier", "Laplace", "Gauss(?:ian)?", "Legendre", "Bessel", "Hermite",
+        "Laguerre", "Chebyshev", "Jacobi", "Hankel", "Hilbert", "Banach", "Kronecker",
+        "Hamiltonian", "Lagrangian", "Hessian", "Riemannian", "Cartesian", "Lorentzian"
+    ],
+    "chemistry_nmr": [
+        "Hahn", "Carr", "Purcell", "Meiboom", "Gill", "Bloembergen", "Solomon",
+        "Overhauser", "Herzfeld", "Berger", "Redfield", "Jeener", "Ernst", "Waugh",
+        "Gutowsky", "Pople", "Mulliken", "Pauling", "Lewis", "Bronsted",
+        "Arrhenius", "Eyring", "Marcus", "Forster", "Dexter", "Franck", "Condon"
+    ],
+    "crystallography_materials": [
+        "Bragg", "Laue", "Miller", "Wyckoff", "Bravais", "Voronoi", "Vegard",
+        "van der Waals", "Lennard", "Jones", "Morse", "Buckingham"
+    ]
+}

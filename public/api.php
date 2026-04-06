@@ -317,25 +317,99 @@ function generateCitekey(array $fields): string {
 }
 
 /**
+ * Load proper names from JSON files for title capitalization protection
+ * Uses static caching so files are only read once per request
+ */
+function loadProperNames(): array {
+    static $properNames = null;
+    
+    if ($properNames !== null) {
+        return $properNames;
+    }
+    
+    $properNames = [];
+    
+    // Load base proper names
+    $baseFile = __DIR__ . '/proper-names.json';
+    if (file_exists($baseFile)) {
+        $data = json_decode(file_get_contents($baseFile), true);
+        if (is_array($data)) {
+            foreach ($data as $key => $names) {
+                if ($key !== '_comment' && is_array($names)) {
+                    $properNames = array_merge($properNames, $names);
+                }
+            }
+        }
+    }
+    
+    // Load custom additions
+    $customFile = __DIR__ . '/proper-names-custom.json';
+    if (file_exists($customFile)) {
+        $custom = json_decode(file_get_contents($customFile), true);
+        if (is_array($custom) && isset($custom['custom']) && is_array($custom['custom'])) {
+            $properNames = array_merge($properNames, $custom['custom']);
+        }
+    }
+    
+    return $properNames;
+}
+
+/**
  * Clean title: wrap capitalized words and formulas in braces, convert HTML to LaTeX
  */
 function cleanTitle(string $title): string {
     // Convert HTML entities
     $title = html_entity_decode($title, ENT_QUOTES | ENT_HTML5, 'UTF-8');
     
+    // Convert degree symbol to LaTeX and protect capitalization
+    // Handle temperatures like 22°C, 22 °C, 590°C → {22$^\circ$C}
+    $title = preg_replace_callback('/(\d+)\s*°\s*([CKF])\b/', function($m) {
+        return '{' . $m[1] . '$^\circ$' . $m[2] . '}';
+    }, $title);
+    // Handle standalone °C, °K, °F (without preceding number)
+    $title = preg_replace_callback('/°([CKF])\b/', function($m) {
+        return '$^\circ$' . $m[1];
+    }, $title);
+    // Handle any remaining standalone degree symbols (e.g., 45°)
+    $title = str_replace('°', '$^\circ$', $title);
+    
     // Convert common HTML tags to LaTeX
-    $title = preg_replace('/<sup>([^<]+)<\/sup>/i', '^{$1}', $title);
-    $title = preg_replace('/<sub>([^<]+)<\/sub>/i', '_{$1}', $title);
+    $title = preg_replace('/<sup>([^<]+)<\/sup>/i', '$^{$1}$', $title);
+    $title = preg_replace('/<sub>([^<]+)<\/sub>/i', '$_{$1}$', $title);
     $title = preg_replace('/<i>([^<]+)<\/i>/i', '\\textit{$1}', $title);
     $title = preg_replace('/<em>([^<]+)<\/em>/i', '\\textit{$1}', $title);
     $title = preg_replace('/<b>([^<]+)<\/b>/i', '\\textbf{$1}', $title);
     $title = preg_replace('/<strong>([^<]+)<\/strong>/i', '\\textbf{$1}', $title);
     $title = strip_tags($title);
     
-    // Check if title already has LaTeX isotope notation (from JS htmlToLatex)
-    $hasIsotopes = preg_match('/\$\^{\d+}\$[A-Z]/', $title);
+    // Convert plain text chemical formulas (no HTML tags): SiO2 -> {SiO$_{2}$}
+    // Match formulas with at least 2 elements where at least one has a subscript number
+    $title = preg_replace_callback('/\b([A-Z][a-z]?\d*(?:[A-Z][a-z]?\d*)*[A-Z][a-z]?\d+|[A-Z][a-z]?\d+(?:[A-Z][a-z]?\d*)+)\b/', function($m) {
+        $match = $m[0];
+        preg_match_all('/[A-Z]/', $match, $caps);
+        if (count($caps[0]) >= 2 && preg_match('/[A-Z][a-z]?\d/', $match)) {
+            return '{' . preg_replace('/([A-Z][a-z]?)(\d+)/', '$1$_{$2}$', $match) . '}';
+        }
+        return $match;
+    }, $title);
+    // Also handle simple compounds in hyphenated contexts: CaO-MgO -> {CaO}-{MgO}
+    $title = preg_replace('/\b([A-Z][a-z]?)([A-Z][a-z]?)\b(?=-)/', '{$1$2}', $title);
+    $title = preg_replace('/(?<=-)\b([A-Z][a-z]?)([A-Z][a-z]?)\b/', '{$1$2}', $title);
     
-    if (!$hasIsotopes) {
+    // Wrap chemical formulas to protect capitalization in BibTeX
+    // Match element (optional subscript) followed by element+subscript sequences
+    // SiP$_{2}$O$_{7}$ -> {SiP$_{2}$O$_{7}$}, Na$_{4}$P$_{2}$O$_{7}$ -> {Na$_{4}$P$_{2}$O$_{7}$}
+    $title = preg_replace('/(?<!\{)([A-Z][a-z]?(?:\$_\{\d+\}\$)?(?:[A-Z][a-z]?\$_\{\d+\}\$)+)/', '{$1}', $title);
+    
+    // Wrap Q-species and similar notations: Q$^{3}$ -> {Q$^{3}$}, T$^{n}$ -> {T$^{n}$}
+    // Common in NMR/glass science for structural units
+    $title = preg_replace('/(?<!\{)\b([A-Z])\$\^\{(\d+)\}\$/', '{$1$^{$2}$}', $title);
+    
+    // Check if title already has LaTeX notation (from JS htmlToLatex)
+    // This includes isotopes like $^{29}$Si or subscripts like $_{4}$ from chemical formulas
+    $hasLatexMath = preg_match('/\$[\^_]/', $title);
+    
+    if (!$hasLatexMath) {
         // Wrap isotope notation: $^{num}$Element or $^num$Element (e.g., $^{29}$Si, $^{27}$Al)
         // Match math formula followed by 1-2 uppercase letters (element symbols)
         $title = preg_replace_callback('/(?<!\{)(\$[^$]+\$)([A-Z][a-z]?)(?!\})/', function($m) {
@@ -346,22 +420,31 @@ function cleanTitle(string $title): string {
         $title = preg_replace_callback('/(?<!\{)(\$[^$]{2,}\$)(?![A-Za-z])(?!\})/', function($m) {
             return '{' . $m[1] . '}';
         }, $title);
-    } else {
-        // Already has formatted isotopes - just wrap existing {$...$Element} groups for BibTeX protection
-        $title = preg_replace_callback('/(?<!\{)(\$\^{\d+}\$[A-Z][a-z]?)(?!\})/', function($m) {
-            return '{' . $m[1] . '}';
-        }, $title);
     }
+    // If already has LaTeX math, skip wrapping to avoid double-processing
     
     // Wrap number + uppercase letter combinations (e.g., 2D, 3D, 1H, 13C) - but skip if already in $...$
     $title = preg_replace_callback('/(?<!\{)(?<!\$)\b(\d+[A-Z]+)\b(?!\})(?!\$)/', function($m) {
         return '{' . $m[1] . '}';
     }, $title);
     
+    // Wrap scientific proper names to protect capitalization (loaded from JSON)
+    $properNames = loadProperNames();
+    if (!empty($properNames)) {
+        $properNamesPattern = '/(?<!\{)\b(' . implode('|', $properNames) . ')\b(?!\})/';
+        $title = preg_replace($properNamesPattern, '{$1}', $title);
+    }
+    
     // Wrap fully capitalized words (2+ chars) in braces if not already
     $title = preg_replace_callback('/(?<!\{)\b([A-Z]{2,})\b(?!\})/', function($m) {
         return '{' . $m[1] . '}';
     }, $title);
+    
+    // Wrap roman numerals in common contexts (for single-letter numerals like I, V, X)
+    // After colon or period with space
+    $title = preg_replace('/([:.]\s*)([IVXLCDM]+)([\.,;:\s]|$)/', '$1{$2}$3', $title);
+    // After words like Part, Section, Volume, Chapter, Phase, Type, Figure, Table
+    $title = preg_replace('/\b(Part|Section|Volume|Chapter|Phase|Type|Figure|Table|Fig|Tab|No|Nr)\s+([IVXLCDM]+)\b/i', '$1 {$2}', $title);
     
     return $title;
 }

@@ -29,7 +29,8 @@
         filterType: '',
         editingCitekey: null, // Original citekey when editing
         importData: null,
-        journalAbbreviations: {} // Loaded from journal-abbrevs.json
+        journalAbbreviations: {}, // Loaded from journal-abbrevs.json
+        properNames: [] // Loaded from proper-names.json
     };
 
     // ==================== DOM Elements ====================
@@ -45,6 +46,7 @@
         btnAddDoi: document.getElementById('btn-add-doi'),
         btnAddArxiv: document.getElementById('btn-add-arxiv'),
         btnAddManual: document.getElementById('btn-add-manual'),
+        btnDownload: document.getElementById('btn-download'),
         btnTools: document.getElementById('btn-tools'),
         toolsMenu: document.getElementById('tools-menu'),
         btnImport: document.getElementById('btn-import'),
@@ -197,15 +199,61 @@
             .replace(/&lt;/gi, '<')
             .replace(/&gt;/gi, '>');
         
-        // Convert isotope notation: 13C -> {$^{13}$C}, 2H -> {$^{2}$H}, etc.
-        // Match mass number followed by element symbol at word boundary
+        // Convert plain text chemical formulas (no HTML tags): SiO2 -> {SiO$_{2}$}
+        // Match formulas with at least 2 elements where at least one has a subscript number
+        result = result.replace(/\b([A-Z][a-z]?\d*(?:[A-Z][a-z]?\d*)*[A-Z][a-z]?\d+|[A-Z][a-z]?\d+(?:[A-Z][a-z]?\d*)+)\b/g, (match) => {
+            const uppercaseCount = (match.match(/[A-Z]/g) || []).length;
+            if (uppercaseCount >= 2 && /[A-Z][a-z]?\d/.test(match)) {
+                return '{' + match.replace(/([A-Z][a-z]?)(\d+)/g, '$1$_{$2}$') + '}';
+            }
+            return match;
+        });
+        // Also handle simple compounds in hyphenated contexts: CaO-MgO -> {CaO}-{MgO}
+        result = result.replace(/\b([A-Z][a-z]?)([A-Z][a-z]?)\b(?=-)/g, '{$1$2}');
+        result = result.replace(/(?<=-)\b([A-Z][a-z]?)([A-Z][a-z]?)\b/g, '{$1$2}');
+        
+        // Wrap chemical formulas to protect capitalization in BibTeX
+        // Match element (optional subscript) followed by element+subscript sequences
+        // SiP$_{2}$O$_{7}$ -> {SiP$_{2}$O$_{7}$}, Na$_{4}$P$_{2}$O$_{7}$ -> {Na$_{4}$P$_{2}$O$_{7}$}
+        result = result.replace(/(?<!\{)([A-Z][a-z]?(?:\$_\{\d+\}\$)?(?:[A-Z][a-z]?\$_\{\d+\}\$)+)/g, '{$1}');
+        
+        // Wrap Q-species and similar notations: Q$^{3}$ -> {Q$^{3}$}, T$^{n}$ -> {T$^{n}$}
+        // Common in NMR/glass science for structural units
+        result = result.replace(/(?<!\{)\b([A-Z])\$\^\{(\d+)\}\$/g, '{$1$^{$2}$}');
+        
+        // Convert isotope notation: 13C or 13 C -> {$^{13}$C}, 2H -> {$^{2}$H}, etc.
+        // Match mass number followed by optional space and element symbol at word boundary
+        // Note: D (deuterium) excluded because 2D/3D usually means two/three-dimensional
         // Wrap in braces to protect case in BibTeX
-        result = result.replace(/\b(\d{1,3})(H|D|T|C|N|O|F|P|S|Si|Na|K|Ca|Fe|Cu|Zn|Br|Cl|I|Al|Mg|B|Li|He|Ne|Ar|Kr|Xe|Se|Te|As|Sb|Bi|Sn|Pb|Ag|Au|Pt|Pd|Rh|Ru|Ir|Os|Co|Ni|Mn|Cr|V|Ti|Sc|Zr|Nb|Mo|Tc|W|Ta|Hf|Re|Cd|Hg|Tl|In|Ga|Ge)\b/g, 
+        result = result.replace(/\b(\d{1,3})\s*(H|T|C|N|O|F|P|S|Si|Na|K|Ca|Fe|Cu|Zn|Br|Cl|I|Al|Mg|B|Li|He|Ne|Ar|Kr|Xe|Se|Te|As|Sb|Bi|Sn|Pb|Ag|Au|Pt|Pd|Rh|Ru|Ir|Os|Co|Ni|Mn|Cr|V|Ti|Sc|Zr|Nb|Mo|Tc|W|Ta|Hf|Re|Cd|Hg|Tl|In|Ga|Ge)\b/g, 
             (match, mass, elem) => `{$^{${mass}}$${elem}}`);
         
-        // Also handle reverse notation: O17 -> {$^{17}$O}, C13 -> {$^{13}$C}
-        result = result.replace(/\b(H|D|T|C|N|O|F|P|S|Si|Na|K|Ca|Fe|Cu|Zn|Br|Cl|I|Al|Mg|B|Li|He|Ne|Ar|Kr|Xe|Se|Te|As|Sb|Bi|Sn|Pb|Ag|Au|Pt|Pd|Rh|Ru|Ir|Os|Co|Ni|Mn|Cr|V|Ti|Sc|Zr|Nb|Mo|Tc|W|Ta|Hf|Re|Cd|Hg|Tl|In|Ga|Ge)(\d{1,3})\b/g, 
+        // Also handle reverse notation: O17 or O 17 -> {$^{17}$O}, C13 -> {$^{13}$C}
+        // D included here since D17 etc. is clearly isotope notation
+        result = result.replace(/\b(H|D|T|C|N|O|F|P|S|Si|Na|K|Ca|Fe|Cu|Zn|Br|Cl|I|Al|Mg|B|Li|He|Ne|Ar|Kr|Xe|Se|Te|As|Sb|Bi|Sn|Pb|Ag|Au|Pt|Pd|Rh|Ru|Ir|Os|Co|Ni|Mn|Cr|V|Ti|Sc|Zr|Nb|Mo|Tc|W|Ta|Hf|Re|Cd|Hg|Tl|In|Ga|Ge)\s*(\d{1,3})\b/g, 
             (match, elem, mass) => `{$^{${mass}}$${elem}}`);
+        
+        // Convert degree symbol to LaTeX: 22 °C -> {22$^\circ$C}, 590°C -> {590$^\circ$C}
+        result = result.replace(/(\d+)\s*°\s*([CKF])\b/g, (m, num, unit) => '{' + num + '$^\\circ$' + unit + '}');
+        // Handle standalone °C, °K, °F without preceding number
+        result = result.replace(/°([CKF])\b/g, (m, unit) => '$^\\circ$' + unit);
+        // Handle any remaining standalone degree symbols
+        result = result.replace(/°/g, '$^\\circ$');
+        
+        // Wrap scientific proper names to protect capitalization (loaded from JSON)
+        if (state.properNames.length > 0) {
+            const properNamesPattern = new RegExp('(?<!\\{)\\b(' + state.properNames.join('|') + ')\\b(?!\\})', 'g');
+            result = result.replace(properNamesPattern, '{$1}');
+        }
+        
+        // Wrap fully capitalized words (2+ chars) in braces to protect case (e.g., NMR, MAS)
+        result = result.replace(/(?<!\{)\b([A-Z]{2,})\b(?!\})/g, '{$1}');
+        
+        // Wrap roman numerals in common contexts:
+        // After colon/period with space: "melts: I. A" -> "melts: {I}. A"
+        result = result.replace(/([:.]\s*)([IVXLCDM]+)(\.|,|;|:|\s|$)/g, '$1{$2}$3');
+        // After words like Part, Section, Volume, Chapter, Phase, Type, Figure, Table
+        result = result.replace(/\b(Part|Section|Volume|Chapter|Phase|Type|Figure|Table|Fig|Tab|No|Nr)\s+([IVXLCDM]+)\b/gi, '$1 {$2}');
         
         return result;
     }
@@ -258,6 +306,40 @@
             return state.journalAbbreviations[key];
         }
         return fullName;
+    }
+
+    /**
+     * Load proper names from JSON files for title capitalization protection
+     * Custom overrides are merged with the base list
+     */
+    async function loadProperNames() {
+        try {
+            // Load base proper names
+            const response = await fetch('proper-names.json', { credentials: 'same-origin' });
+            if (response.ok) {
+                const data = await response.json();
+                // Flatten all categories into a single array
+                const names = [];
+                for (const key of Object.keys(data)) {
+                    if (key !== '_comment' && Array.isArray(data[key])) {
+                        names.push(...data[key]);
+                    }
+                }
+                state.properNames = names;
+                console.log(`Loaded ${state.properNames.length} proper names`);
+            }
+            // Load custom additions (merged with base list)
+            const customResponse = await fetch('proper-names-custom.json', { credentials: 'same-origin' });
+            if (customResponse.ok) {
+                const custom = await customResponse.json();
+                if (custom.custom && Array.isArray(custom.custom)) {
+                    state.properNames.push(...custom.custom);
+                    console.log(`Loaded ${custom.custom.length} custom proper names`);
+                }
+            }
+        } catch (e) {
+            console.warn('Could not load proper names:', e);
+        }
     }
 
     /**
@@ -1209,6 +1291,20 @@
             showEntryForm();
         });
         
+        if (elements.btnDownload) {
+            elements.btnDownload.addEventListener('click', () => {
+                // Use hidden iframe to trigger download with existing auth
+                let iframe = document.getElementById('download-iframe');
+                if (!iframe) {
+                    iframe = document.createElement('iframe');
+                    iframe.id = 'download-iframe';
+                    iframe.style.display = 'none';
+                    document.body.appendChild(iframe);
+                }
+                iframe.src = 'api.php?action=download';
+            });
+        }
+        
         // Tools dropdown
         elements.btnTools.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1683,6 +1779,7 @@
         initEventListeners();
         document.body.dataset.entryType = 'article';
         loadJournalAbbreviations(); // Load abbreviations in background
+        loadProperNames(); // Load proper names in background
         
         // Check if session is available
         const acquired = await checkAndAcquireSession();
