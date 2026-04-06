@@ -29,7 +29,16 @@ A lightweight, self-hosted web app for managing BibTeX references. Built for sma
    ```
 3. Visit the URL and log in
 
-For cPanel hosting (e.g., GreenGeeks): use Security → Password Protect Directories instead.
+### Shared Hosting (Bluehost, HostGator, GoDaddy, etc.)
+
+Most shared hosts use cPanel:
+
+1. **Upload files:** cPanel → File Manager → navigate to `public_html` (or a subdirectory like `public_html/biblio`) → Upload the contents of the `public/` folder
+2. **Set permissions:** Right-click `refs.bib` → Permissions → set to 644
+3. **Enable password protection:** cPanel → Directory Privacy (or "Password Protect Directories") → select the folder → enable protection and create a username/password
+4. **Test:** Visit `yourdomain.com` (or `yourdomain.com/biblio`) and log in
+
+No database setup, no SSH access, no composer install required.
 
 ## Usage
 
@@ -56,9 +65,13 @@ For cPanel hosting (e.g., GreenGeeks): use Security → Password Protect Directo
 
 ## Local Development
 
+Requires PHP 8.0+. Auth is bypassed when running locally.
+
 ```bash
 cd public && php -S localhost:8000
 ```
+
+Then open http://localhost:8000
 
 ## Limitations
 
