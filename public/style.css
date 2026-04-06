@@ -98,7 +98,7 @@ nav {
 }
 
 .dropdown-item:hover {
-    background-color: var(--hover-color);
+    background-color: var(--bg-color);
 }
 
 /* Buttons */

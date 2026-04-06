@@ -3,7 +3,7 @@
 A lightweight, self-hosted web application for collaborative BibTeX reference management. Designed for small research groups who want a shared, browser-accessible bibliography without the complexity of Zotero, Mendeley, or a full CMS.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![PHP](https://img.shields.io/badge/PHP-7.4%2B-purple.svg)
+![PHP](https://img.shields.io/badge/PHP-8.0%2B-purple.svg)
 
 ## Features
 
@@ -15,40 +15,63 @@ A lightweight, self-hosted web application for collaborative BibTeX reference ma
 - **Import/Merge** - Upload existing .bib files with duplicate detection
 - **Export** - Download the complete .bib file anytime
 - **Auto-generated Citation Keys** - Format: `journalabbr_volume_page_year`
-- **Title Formatting** - Automatic handling of capitalized words, formulas, and HTML conversion
+- **Journal Abbreviations** - Automatic lookup from JabRef database (~4,700 journals) with custom overrides
+- **Smart Title Handling** - Automatic isotope notation, chemical formulas, and LaTeX formatting
+- **Dual-Source Metadata** - CrossRef primary with Semantic Scholar fallback for better data quality
+- **Bulk Operations** - Refresh all entries from DOIs, clean titles across bibliography
+
+## Smart Title Processing
+
+The app intelligently handles scientific notation in titles:
+
+| Input | Output |
+|-------|--------|
+| `17O NMR` | `{$^{17}$O} NMR` |
+| `O17 quadrupolar` | `{$^{17}$O} quadrupolar` |
+| `<sup>13</sup>C` | `{$^{13}$C}` |
+| MathML isotopes | `{$^{mass}$Element}` |
+| `2D materials` | `{2D} materials` |
+| `<sub>x</sub>` | `$_{x}$` |
+
+CrossRef sometimes has incomplete isotope data. The app automatically checks Semantic Scholar and uses whichever source has more complete isotope notation.
 
 ## Tech Stack
 
 | Layer | Choice | Reason |
 |-------|--------|--------|
 | Frontend | Vanilla HTML/CSS/JS | No build step, easy to deploy |
-| Backend | PHP 7.4+ | Available by default on shared hosting |
+| Backend | PHP 8.0+ | Available by default on shared hosting |
 | Data Store | Plain `.bib` file | Direct LaTeX compatibility, no DB needed |
 | Auth | HTTP Basic Auth | Zero-code, browser caches credentials |
 | DOI Lookup | CrossRef API | Free, no key required |
+| Title Verification | Semantic Scholar API | Fallback for better isotope data |
 | arXiv Lookup | arXiv API | Free, no key required |
+| Journal Abbrevs | JabRef Database | ~4,700 abbreviations |
 
 ## Repository Structure
 
 ```
-bibtex-manager/
-├── public/                  # Deploy this folder to your server
-│   ├── index.html           # Main UI (single-page app)
-│   ├── app.js               # All frontend logic
-│   ├── style.css            # Styling
-│   ├── api.php              # Backend: file read/write, BibTeX parsing
-│   └── .htaccess.example    # Rename to .htaccess and configure
+Biblio/
+├── public/                       # Deploy this folder to your server
+│   ├── index.html                # Main UI (single-page app)
+│   ├── app.js                    # All frontend logic
+│   ├── style.css                 # Styling
+│   ├── api.php                   # Backend: file read/write, BibTeX parsing
+│   ├── journal-abbrevs.json      # JabRef abbreviation database
+│   ├── journal-abbrevs-custom.json  # Custom overrides (edit as needed)
+│   └── .htaccess.example         # Rename to .htaccess and configure
 ├── sample/
-│   └── refs.bib             # Sample BibTeX file for testing
-├── plan.md                  # Project specification
-└── README.md                # This file
+│   └── refs.bib                  # Sample BibTeX file for testing
+├── .gitignore
+├── plan.md                       # Project specification
+└── README.md                     # This file
 ```
 
 ## Deployment
 
 ### Requirements
 
-- PHP 7.4 or higher
+- PHP 8.0 or higher
 - Apache with `mod_rewrite` and `mod_auth_basic` (standard on shared hosting)
 - Write permissions on the deployment directory
 
@@ -109,11 +132,32 @@ The main view shows all entries in a paginated, sortable table. Use the search b
 
 ### Adding Entries
 
-**By DOI:** Click "Add by DOI", enter the DOI (e.g., `10.1021/acs.jpclett.1c02254`), and the metadata will be fetched automatically. Review and save.
+**By DOI:** Click "Add by DOI", enter the DOI (e.g., `10.1021/acs.jpclett.1c02254`), and metadata will be fetched from CrossRef and verified against Semantic Scholar. Review and save.
 
 **By arXiv:** Click "Add by arXiv", enter the arXiv ID (e.g., `2103.12345`), and the preprint metadata will be fetched. Review and save.
 
 **Manually:** Click "Add Manually" to open a blank entry form. Select the entry type and fill in the fields.
+
+### Tools Menu
+
+The **Tools ▾** dropdown provides batch operations:
+
+- **Import .bib** - Upload and merge an existing bibliography file
+- **Clean Titles** - Reformat all titles with proper LaTeX notation
+- **Refresh from DOIs** - Re-fetch metadata from CrossRef/Semantic Scholar for all entries with DOIs (preserves citekeys)
+
+### Journal Abbreviations
+
+Journal names are automatically abbreviated using the JabRef database. To add custom abbreviations, edit `journal-abbrevs-custom.json`:
+
+```json
+{
+  "journal of magnetic resonance": "J. Magn. Reson.",
+  "the london, edinburgh and dublin philosophical magazine": "Phil. Mag."
+}
+```
+
+Custom entries take precedence over the JabRef database.
 
 ### Citation Key Format
 
@@ -194,6 +238,7 @@ Then open http://localhost:8000 in your browser. Note that HTTP Basic Auth won't
 - **No user tracking:** All changes are anonymous
 - **No PDF attachments:** This is a metadata-only manager
 - **No citation formatting:** Use your LaTeX workflow for formatted citations
+- **Upstream data quality:** Some CrossRef entries have incomplete metadata (e.g., missing isotope notation). The Semantic Scholar fallback helps but doesn't catch everything—manual review recommended for critical entries.
 
 ## License
 
