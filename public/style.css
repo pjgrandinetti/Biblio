@@ -676,6 +676,41 @@ body[data-entry-type="unpublished"] .field-unpublished {
     justify-content: flex-end;
 }
 
+.modal-logout {
+    max-width: 500px;
+}
+
+.modal-logout ol {
+    margin: 1rem 0 1.5rem 1.5rem;
+    color: var(--text-color);
+}
+
+.modal-logout ol li {
+    margin-bottom: 0.5rem;
+}
+
+.modal-logout .hint {
+    font-size: 0.9em;
+    background: rgba(230, 126, 34, 0.1);
+    padding: 0.75rem;
+    border-radius: var(--border-radius);
+    border-left: 3px solid #e67e22;
+    margin-bottom: 1.5rem;
+}
+
+.modal-locked {
+    max-width: 450px;
+}
+
+.modal-locked .hint {
+    font-size: 0.9em;
+    background: rgba(231, 76, 60, 0.1);
+    padding: 0.75rem;
+    border-radius: var(--border-radius);
+    border-left: 3px solid #e74c3c;
+    margin-bottom: 1.5rem;
+}
+
 /* Loading overlay */
 .loading-overlay {
     position: fixed;

@@ -6,7 +6,19 @@
     'use strict';
 
     // ==================== State ====================
+    
+    // Generate or retrieve session ID
+    function getSessionId() {
+        let sessionId = sessionStorage.getItem('biblio_session_id');
+        if (!sessionId) {
+            sessionId = 'sess_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+            sessionStorage.setItem('biblio_session_id', sessionId);
+        }
+        return sessionId;
+    }
+    
     const state = {
+        sessionId: getSessionId(),
         entries: [],
         filteredEntries: [],
         currentPage: 1,
@@ -92,6 +104,15 @@
         deleteCitekey: document.getElementById('delete-citekey'),
         btnDeleteConfirm: document.getElementById('btn-delete-confirm'),
         btnDeleteCancel: document.getElementById('btn-delete-cancel'),
+        
+        // Logout modal
+        btnLogout: document.getElementById('btn-logout'),
+        modalLogout: document.getElementById('modal-logout'),
+        
+        // Locked modal
+        modalLocked: document.getElementById('modal-locked'),
+        lockedMinutes: document.getElementById('locked-minutes'),
+        btnLockedRetry: document.getElementById('btn-locked-retry'),
         
         // Loading
         loading: document.getElementById('loading')
@@ -294,14 +315,23 @@
         };
 
         if (isFormData) {
+            // For FormData, append session_id
+            data.append('session_id', state.sessionId);
+            data.append('action', action);
             options.body = data;
         } else {
             options.headers = { 'Content-Type': 'application/json' };
-            options.body = JSON.stringify({ action, ...data });
+            options.body = JSON.stringify({ action, session_id: state.sessionId, ...data });
         }
 
         const response = await fetch('api.php', options);
         const result = await response.json();
+
+        // Handle session lock
+        if (response.status === 423 || result.error === 'locked') {
+            showLockedModal(result.minutes_remaining);
+            throw new Error('Session locked');
+        }
 
         if (result.error) {
             throw new Error(result.error);
@@ -1065,7 +1095,9 @@
             showView('view-list');
             
         } catch (error) {
-            alert('Import failed: ' + error.message);
+            if (error.message !== 'Session locked') {
+                alert('Import failed: ' + error.message);
+            }
         } finally {
             hideLoading();
         }
@@ -1098,9 +1130,62 @@
             await loadEntries();
             showView('view-list');
         } catch (error) {
-            alert('Delete failed: ' + error.message);
+            if (error.message !== 'Session locked') {
+                alert('Delete failed: ' + error.message);
+            }
         } finally {
             hideLoading();
+        }
+    }
+
+    // ==================== Session Lock Functions ====================
+    
+    function showLockedModal(minutesRemaining) {
+        elements.lockedMinutes.textContent = minutesRemaining || '30';
+        elements.modalLocked.classList.add('active');
+        hideLoading();
+    }
+    
+    function hideLockedModal() {
+        elements.modalLocked.classList.remove('active');
+    }
+    
+    async function releaseSessionLock() {
+        try {
+            const response = await fetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ 
+                    action: 'release_session', 
+                    session_id: state.sessionId 
+                })
+            });
+            return response.ok;
+        } catch {
+            return false;
+        }
+    }
+    
+    async function checkAndAcquireSession() {
+        try {
+            const response = await fetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ 
+                    action: 'check_session', 
+                    session_id: state.sessionId 
+                })
+            });
+            const result = await response.json();
+            if (result.locked) {
+                showLockedModal(result.minutes_remaining);
+                return false;
+            }
+            return true;
+        } catch {
+            return true; // Allow access on error
         }
     }
 
@@ -1158,7 +1243,9 @@
                 await loadEntries();
                 alert(`Cleaned ${result.cleanedCount} of ${result.totalCount} titles.`);
             } catch (error) {
-                alert('Failed to clean titles: ' + error.message);
+                if (error.message !== 'Session locked') {
+                    alert('Failed to clean titles: ' + error.message);
+                }
             } finally {
                 hideLoading();
             }
@@ -1556,10 +1643,32 @@
             }
         });
         
+        // Logout modal
+        elements.btnLogout.addEventListener('click', async () => {
+            // Release the session lock and show logout info
+            await releaseSessionLock();
+            elements.modalLogout.classList.add('active');
+        });
+        // No dismiss - user must close the tab
+        
+        // Locked modal
+        elements.btnLockedRetry.addEventListener('click', async () => {
+            hideLockedModal();
+            const acquired = await checkAndAcquireSession();
+            if (acquired) {
+                elements.modalLogout.classList.remove('active'); // Also hide logout modal if shown
+                loadEntries();
+            }
+        });
+        
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
-                if (elements.modalDelete.classList.contains('active')) {
+                if (elements.modalLocked.classList.contains('active')) {
+                    // Don't allow escape from locked modal
+                } else if (elements.modalLogout.classList.contains('active')) {
+                    // Don't allow escape from logout modal (session is released)
+                } else if (elements.modalDelete.classList.contains('active')) {
                     hideDeleteModal();
                 } else if (!elements.viewList.classList.contains('active')) {
                     showView('view-list');
@@ -1570,11 +1679,16 @@
 
     // ==================== Initialize ====================
     
-    function init() {
+    async function init() {
         initEventListeners();
         document.body.dataset.entryType = 'article';
         loadJournalAbbreviations(); // Load abbreviations in background
-        loadEntries();
+        
+        // Check if session is available
+        const acquired = await checkAndAcquireSession();
+        if (acquired) {
+            loadEntries();
+        }
     }
 
     // Start when DOM is ready

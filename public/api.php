@@ -12,6 +12,8 @@ header('Cache-Control: no-cache, no-store, must-revalidate');
 // Configuration
 define('BIB_FILE', __DIR__ . '/refs.bib');
 define('BACKUP_FILE', __DIR__ . '/refs.bib.bak');
+define('SESSION_LOCK_FILE', __DIR__ . '/.session_lock');
+define('SESSION_LOCK_TIMEOUT', 30 * 60); // 30 minutes in seconds
 
 /**
  * BibTeX Parser Class
@@ -447,6 +449,77 @@ function findEntryByDoi(array $entries, string $doi): ?int {
 /**
  * API Response helpers
  */
+/**
+ * Session Lock Functions
+ * Ensures only one user can actively use the app at a time
+ */
+
+function getSessionLock(): ?array {
+    if (!file_exists(SESSION_LOCK_FILE)) {
+        return null;
+    }
+    $data = json_decode(file_get_contents(SESSION_LOCK_FILE), true);
+    if (!$data || !isset($data['session_id']) || !isset($data['timestamp'])) {
+        return null;
+    }
+    // Check if lock has expired
+    if (time() - $data['timestamp'] > SESSION_LOCK_TIMEOUT) {
+        @unlink(SESSION_LOCK_FILE);
+        return null;
+    }
+    return $data;
+}
+
+function acquireSessionLock(string $sessionId): bool {
+    $currentLock = getSessionLock();
+    
+    // No lock or same session - acquire/refresh
+    if ($currentLock === null || $currentLock['session_id'] === $sessionId) {
+        $data = [
+            'session_id' => $sessionId,
+            'timestamp' => time()
+        ];
+        return file_put_contents(SESSION_LOCK_FILE, json_encode($data)) !== false;
+    }
+    
+    // Different session holds the lock
+    return false;
+}
+
+function releaseSessionLock(string $sessionId): bool {
+    $currentLock = getSessionLock();
+    if ($currentLock === null) {
+        return true; // Already released
+    }
+    if ($currentLock['session_id'] === $sessionId) {
+        return @unlink(SESSION_LOCK_FILE);
+    }
+    return false; // Can't release someone else's lock
+}
+
+function checkSessionLock(string $sessionId): array {
+    $currentLock = getSessionLock();
+    
+    if ($currentLock === null) {
+        // No lock - acquire it
+        acquireSessionLock($sessionId);
+        return ['locked' => false];
+    }
+    
+    if ($currentLock['session_id'] === $sessionId) {
+        // Our lock - refresh it
+        acquireSessionLock($sessionId);
+        return ['locked' => false];
+    }
+    
+    // Someone else's lock
+    $remaining = SESSION_LOCK_TIMEOUT - (time() - $currentLock['timestamp']);
+    return [
+        'locked' => true,
+        'minutes_remaining' => ceil($remaining / 60)
+    ];
+}
+
 function jsonResponse(array $data, int $status = 200): void {
     http_response_code($status);
     echo json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
@@ -493,6 +566,41 @@ function handleRequest(): void {
     }
     
     $action = $input['action'] ?? '';
+    $sessionId = $input['session_id'] ?? '';
+    
+    // Session management actions (don't require lock)
+    if ($action === 'check_session') {
+        if (!$sessionId) {
+            errorResponse('Session ID required');
+        }
+        $lockStatus = checkSessionLock($sessionId);
+        jsonResponse($lockStatus);
+        return;
+    }
+    
+    if ($action === 'release_session') {
+        if (!$sessionId) {
+            errorResponse('Session ID required');
+        }
+        releaseSessionLock($sessionId);
+        jsonResponse(['success' => true]);
+        return;
+    }
+    
+    // All other actions require a valid session
+    if (!$sessionId) {
+        errorResponse('Session ID required', 401);
+    }
+    
+    $lockStatus = checkSessionLock($sessionId);
+    if ($lockStatus['locked']) {
+        jsonResponse([
+            'error' => 'locked',
+            'message' => 'Another session is currently using the application.',
+            'minutes_remaining' => $lockStatus['minutes_remaining']
+        ], 423);
+        return;
+    }
     
     try {
         switch ($action) {

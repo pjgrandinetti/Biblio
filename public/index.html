@@ -22,6 +22,7 @@
                     <button id="btn-refresh-all-dois" class="dropdown-item" title="Re-fetch metadata from CrossRef for all entries with DOIs">Refresh from DOIs</button>
                 </div>
             </div>
+            <button id="btn-logout" class="btn btn-secondary" title="Logout information">Logout</button>
         </nav>
     </header>
 
@@ -286,6 +287,34 @@
             <div class="modal-actions">
                 <button id="btn-delete-confirm" class="btn btn-danger">Delete</button>
                 <button id="btn-delete-cancel" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Logout Info Modal -->
+    <div id="modal-logout" class="modal">
+        <div class="modal-content modal-logout">
+            <h3>Session Ended</h3>
+            <p>Your session has been released. Another user can now access the application.</p>
+            <p><strong>To fully log out of HTTP Basic Auth:</strong></p>
+            <ol>
+                <li>Close this browser tab</li>
+                <li>Close all other browser tabs and windows</li>
+                <li>Completely quit/exit your browser application</li>
+            </ol>
+            <p class="hint">Your browser remembers your credentials until it is fully restarted.</p>
+        </div>
+    </div>
+
+    <!-- Session Locked Modal -->
+    <div id="modal-locked" class="modal">
+        <div class="modal-content modal-locked">
+            <h3>Session In Use</h3>
+            <p>Another browser session is currently using this application.</p>
+            <p>To prevent data conflicts, only one session can be active at a time.</p>
+            <p class="hint">The lock will automatically expire in approximately <strong id="locked-minutes">30</strong> minutes if the other session becomes inactive.</p>
+            <div class="modal-actions">
+                <button id="btn-locked-retry" class="btn btn-primary">Try Again</button>
             </div>
         </div>
     </div>
