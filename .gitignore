@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# User data files (not tracked - each deployment has its own)
+public/refs.bib
+public/refs.bib.bak
+
+# Sensitive config files
+public/.htaccess
+public/.htpasswd
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp

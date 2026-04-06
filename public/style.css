@@ -1,0 +1,780 @@
+/* BibTeX Manager - Stylesheet */
+
+:root {
+    --primary-color: #2563eb;
+    --primary-hover: #1d4ed8;
+    --secondary-color: #6b7280;
+    --secondary-hover: #4b5563;
+    --danger-color: #dc2626;
+    --danger-hover: #b91c1c;
+    --success-color: #16a34a;
+    --warning-color: #d97706;
+    --bg-color: #f9fafb;
+    --card-bg: #ffffff;
+    --text-color: #1f2937;
+    --text-muted: #6b7280;
+    --border-color: #e5e7eb;
+    --border-radius: 8px;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+        Ubuntu, Cantarell, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    line-height: 1.6;
+}
+
+/* Header */
+header {
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border-color);
+    padding: 1rem 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+header h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+nav {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* Dropdown */
+.dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 1000;
+    min-width: 160px;
+    margin-top: 0.25rem;
+    padding: 0.25rem 0;
+    background-color: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.dropdown-menu.show {
+    display: block;
+}
+
+.dropdown-item {
+    display: block;
+    width: 100%;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    color: var(--text-color);
+    text-align: left;
+    text-decoration: none;
+    background: none;
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.15s;
+}
+
+.dropdown-item:hover {
+    background-color: var(--hover-color);
+}
+
+/* Buttons */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    border: none;
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    text-decoration: none;
+    transition: background-color 0.15s, transform 0.1s;
+}
+
+.btn:hover {
+    transform: translateY(-1px);
+}
+
+.btn:active {
+    transform: translateY(0);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.btn-primary {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background-color: var(--primary-hover);
+}
+
+.btn-secondary {
+    background-color: var(--secondary-color);
+    color: white;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background-color: var(--secondary-hover);
+}
+
+.btn-danger {
+    background-color: var(--danger-color);
+    color: white;
+}
+
+.btn-danger:hover:not(:disabled) {
+    background-color: var(--danger-hover);
+}
+
+.btn-small {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+}
+
+.btn-icon {
+    padding: 0.25rem;
+    background: transparent;
+    color: var(--text-muted);
+}
+
+.btn-icon:hover {
+    color: var(--primary-color);
+}
+
+/* Main content */
+main {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+/* Views */
+.view {
+    display: none;
+}
+
+.view.active {
+    display: block;
+}
+
+/* Controls bar */
+.controls {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.controls input[type="text"],
+.controls select {
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    background: var(--card-bg);
+}
+
+.controls input[type="text"] {
+    flex: 1;
+    min-width: 250px;
+}
+
+.controls select {
+    min-width: 150px;
+}
+
+.controls input:focus,
+.controls select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+/* Table */
+.table-container {
+    background: var(--card-bg);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow);
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+th, td {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* Column widths */
+th:nth-child(1), td:nth-child(1) { width: 18%; } /* Citekey */
+th:nth-child(2), td:nth-child(2) { width: 22%; } /* Authors */
+th:nth-child(3), td:nth-child(3) { width: 42%; } /* Title */
+th:nth-child(4), td:nth-child(4) { width: 8%; }  /* Year */
+th:nth-child(5), td:nth-child(5) { width: 10%; } /* Type */
+
+th {
+    background: var(--bg-color);
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+th.sortable {
+    cursor: pointer;
+    user-select: none;
+}
+
+th.sortable:hover {
+    color: var(--primary-color);
+}
+
+th.sort-asc::after {
+    content: ' ↑';
+}
+
+th.sort-desc::after {
+    content: ' ↓';
+}
+
+tbody tr:hover {
+    background: var(--bg-color);
+}
+
+td {
+    font-size: 0.875rem;
+}
+
+td.cell-citekey {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 0.8125rem;
+    color: var(--primary-color);
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+td.cell-citekey.clickable {
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    transition: text-decoration-color 0.15s;
+}
+
+td.cell-citekey.clickable:hover {
+    text-decoration-color: var(--primary-color);
+}
+
+td.cell-title {
+    max-width: 400px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+td.cell-title a {
+    color: var(--primary);
+    text-decoration: none;
+}
+
+td.cell-title a:hover {
+    text-decoration: underline;
+}
+
+td.cell-authors {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+td.cell-type {
+    text-transform: capitalize;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 3rem;
+    color: var(--text-muted);
+}
+
+/* Pagination */
+.pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+}
+
+/* Lookup forms */
+.lookup-form,
+.import-form,
+.entry-form {
+    background: var(--card-bg);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow);
+    padding: 2rem;
+    max-width: 700px;
+    margin: 0 auto;
+}
+
+.lookup-form h2,
+.import-form h2,
+.entry-form h2 {
+    margin-bottom: 1.5rem;
+    font-size: 1.25rem;
+}
+
+.form-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.form-header h2 {
+    margin-bottom: 0;
+}
+
+.form-actions-top {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.form-actions-top .btn-danger {
+    margin-left: 1rem;
+}
+
+.input-group {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.input-group input {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    font-size: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+}
+
+.input-group input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.hint {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    margin-bottom: 1.5rem;
+}
+
+/* Status messages */
+.status {
+    padding: 0.75rem 1rem;
+    border-radius: var(--border-radius);
+    margin: 1rem 0;
+    font-size: 0.875rem;
+}
+
+.status:empty {
+    display: none;
+}
+
+.status.error {
+    background: #fef2f2;
+    color: var(--danger-color);
+    border: 1px solid #fecaca;
+}
+
+.status.success {
+    background: #f0fdf4;
+    color: var(--success-color);
+    border: 1px solid #bbf7d0;
+}
+
+.status.loading {
+    background: #eff6ff;
+    color: var(--primary-color);
+    border: 1px solid #bfdbfe;
+}
+
+/* Entry form */
+.form-row {
+    margin-bottom: 1rem;
+}
+
+.form-row label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+    color: var(--text-muted);
+}
+
+.form-row input,
+.form-row select,
+.form-row textarea {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.9375rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    font-family: inherit;
+}
+
+.form-row input:focus,
+.form-row select:focus,
+.form-row textarea:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.form-row textarea {
+    resize: vertical;
+}
+
+.form-row-checkbox {
+    margin-top: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.form-row-checkbox label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.form-row-checkbox input[type="checkbox"] {
+    width: auto;
+    cursor: pointer;
+}
+
+.form-row input:disabled,
+.form-row textarea:disabled {
+    background-color: var(--bg-color);
+    color: var(--text-muted);
+    cursor: not-allowed;
+}
+
+.input-with-button {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.input-with-button input {
+    flex: 1;
+}
+
+.form-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border-color);
+}
+
+/* Conditional field visibility */
+.form-row[class*="field-"] {
+    display: none;
+}
+
+/* Show fields based on entry type */
+body[data-entry-type="article"] .field-article,
+body[data-entry-type="book"] .field-book,
+body[data-entry-type="inproceedings"] .field-inproceedings,
+body[data-entry-type="incollection"] .field-incollection,
+body[data-entry-type="phdthesis"] .field-phdthesis,
+body[data-entry-type="mastersthesis"] .field-mastersthesis,
+body[data-entry-type="misc"] .field-misc,
+body[data-entry-type="techreport"] .field-techreport,
+body[data-entry-type="unpublished"] .field-unpublished {
+    display: block;
+}
+
+/* Import view */
+.file-upload {
+    text-align: center;
+    padding: 2rem;
+    border: 2px dashed var(--border-color);
+    border-radius: var(--border-radius);
+    margin-bottom: 1rem;
+}
+
+.file-upload input[type="file"] {
+    position: absolute;
+    left: -9999px;
+}
+
+.import-summary {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-bottom: 2rem;
+}
+
+.summary-item {
+    text-align: center;
+    padding: 1rem 2rem;
+    border-radius: var(--border-radius);
+    min-width: 120px;
+}
+
+.summary-item .count {
+    display: block;
+    font-size: 2rem;
+    font-weight: 700;
+}
+
+.summary-item .label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.summary-new {
+    background: #f0fdf4;
+    color: var(--success-color);
+}
+
+.summary-skip {
+    background: var(--bg-color);
+    color: var(--text-muted);
+}
+
+.summary-conflict {
+    background: #fef3c7;
+    color: var(--warning-color);
+}
+
+.conflicts-list,
+.new-entries-list {
+    margin-top: 1.5rem;
+}
+
+.conflicts-list h3,
+.new-entries-list h3 {
+    font-size: 1rem;
+    margin-bottom: 1rem;
+}
+
+.entry-preview {
+    background: var(--bg-color);
+    padding: 1rem;
+    border-radius: var(--border-radius);
+    margin-bottom: 0.5rem;
+    font-size: 0.875rem;
+}
+
+.entry-preview .citekey {
+    font-family: monospace;
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+.conflict-item {
+    border: 1px solid var(--warning-color);
+    border-radius: var(--border-radius);
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+.conflict-choice {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.5rem;
+}
+
+/* Modal */
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal.active {
+    display: flex;
+}
+
+.modal-content {
+    background: var(--card-bg);
+    padding: 2rem;
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-md);
+    max-width: 400px;
+    width: 90%;
+}
+
+.modal-content h3 {
+    margin-bottom: 1rem;
+}
+
+.modal-content p {
+    margin-bottom: 1.5rem;
+    color: var(--text-muted);
+}
+
+.modal-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}
+
+/* Loading overlay */
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.8);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.loading-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+}
+
+.spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--border-color);
+    border-top-color: var(--primary-color);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+.progress-container {
+    width: 300px;
+    text-align: center;
+}
+
+.progress-text {
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: var(--border-color);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: var(--primary-color);
+    width: 0%;
+    transition: width 0.2s ease;
+}
+
+.btn-stop {
+    margin-top: 1rem;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    header {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    nav {
+        justify-content: center;
+    }
+
+    main {
+        padding: 1rem;
+    }
+
+    .controls {
+        flex-direction: column;
+    }
+
+    .controls input[type="text"] {
+        min-width: 100%;
+    }
+
+    .table-container {
+        overflow-x: auto;
+    }
+
+    table {
+        min-width: 700px;
+    }
+
+    .import-summary {
+        flex-direction: column;
+        align-items: center;
+    }
+}

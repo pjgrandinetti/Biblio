@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BibTeX Manager</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>BibTeX Manager</h1>
+        <nav>
+            <button id="btn-add-doi" class="btn btn-primary" title="Add a new entry by looking up its DOI">Add by DOI</button>
+            <button id="btn-add-arxiv" class="btn btn-primary" title="Add a new entry by looking up its arXiv ID">Add by arXiv</button>
+            <button id="btn-add-manual" class="btn btn-secondary" title="Create a new entry by filling in fields manually">Add Manually</button>
+            <a href="api.php?action=download" class="btn btn-secondary" title="Download entire bibliography as a .bib file" download>Download .bib</a>
+            <div class="dropdown">
+                <button id="btn-tools" class="btn btn-secondary" title="Additional tools and batch operations">Tools ▾</button>
+                <div class="dropdown-menu" id="tools-menu">
+                    <button id="btn-import" class="dropdown-item" title="Import entries from an existing .bib file">Import .bib</button>
+                    <button id="btn-clean-titles" class="dropdown-item" title="Wrap acronyms, formulas, and capitalized words in braces for proper LaTeX rendering">Clean Titles</button>
+                    <button id="btn-refresh-all-dois" class="dropdown-item" title="Re-fetch metadata from CrossRef for all entries with DOIs">Refresh from DOIs</button>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <main>
+        <!-- Entry List View -->
+        <section id="view-list" class="view active">
+            <div class="controls">
+                <input type="text" id="search-input" placeholder="Search by author, title, year, journal...">
+                <select id="filter-type">
+                    <option value="">All Types</option>
+                    <option value="article">Article</option>
+                    <option value="book">Book</option>
+                    <option value="inproceedings">In Proceedings</option>
+                    <option value="incollection">In Collection</option>
+                    <option value="phdthesis">PhD Thesis</option>
+                    <option value="mastersthesis">Master's Thesis</option>
+                    <option value="misc">Misc</option>
+                    <option value="techreport">Tech Report</option>
+                    <option value="unpublished">Unpublished</option>
+                </select>
+            </div>
+            
+            <div class="table-container">
+                <table id="entries-table">
+                    <thead>
+                        <tr>
+                            <th class="sortable" data-sort="citekey">Citekey</th>
+                            <th class="sortable" data-sort="author">Authors</th>
+                            <th class="sortable" data-sort="title">Title</th>
+                            <th class="sortable" data-sort="year">Year</th>
+                            <th class="sortable" data-sort="type">Type</th>
+                        </tr>
+                    </thead>
+                    <tbody id="entries-body">
+                        <!-- Entries populated by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="pagination">
+                <button id="btn-prev" class="btn btn-small" disabled>← Previous</button>
+                <span id="page-info">Page 1 of 1</span>
+                <button id="btn-next" class="btn btn-small" disabled>Next →</button>
+            </div>
+        </section>
+
+        <!-- DOI Lookup View -->
+        <section id="view-doi" class="view">
+            <div class="lookup-form">
+                <h2>Add Entry by DOI</h2>
+                <div class="input-group">
+                    <input type="text" id="doi-input" placeholder="Enter DOI (e.g., 10.1021/acs.jpclett.1c02254)">
+                    <button id="btn-doi-lookup" class="btn btn-primary">Lookup</button>
+                </div>
+                <p class="hint">Enter a DOI to automatically fetch metadata from CrossRef</p>
+                <div id="doi-status" class="status"></div>
+                <button id="btn-doi-cancel" class="btn btn-secondary">Cancel</button>
+            </div>
+        </section>
+
+        <!-- arXiv Lookup View -->
+        <section id="view-arxiv" class="view">
+            <div class="lookup-form">
+                <h2>Add Entry by arXiv ID</h2>
+                <div class="input-group">
+                    <input type="text" id="arxiv-input" placeholder="Enter arXiv ID (e.g., 2103.12345 or hep-th/9901001)">
+                    <button id="btn-arxiv-lookup" class="btn btn-primary">Lookup</button>
+                </div>
+                <p class="hint">Enter an arXiv ID to automatically fetch preprint metadata</p>
+                <div id="arxiv-status" class="status"></div>
+                <button id="btn-arxiv-cancel" class="btn btn-secondary">Cancel</button>
+            </div>
+        </section>
+
+        <!-- Entry Form View -->
+        <section id="view-form" class="view">
+            <div class="entry-form">
+                <div class="form-header">
+                    <h2 id="form-title">Add New Entry</h2>
+                    <div class="form-actions-top">
+                        <button id="btn-save-entry" class="btn btn-primary">Save Entry</button>
+                        <button id="btn-cancel-entry" class="btn btn-secondary">Cancel</button>
+                        <button id="btn-delete-entry" class="btn btn-danger" style="display: none;">Delete</button>
+                    </div>
+                </div>
+                
+                <div id="form-status" class="status"></div>
+                
+                <div class="form-row">
+                    <label for="entry-type">Entry Type:</label>
+                    <select id="entry-type">
+                        <option value="article">Article</option>
+                        <option value="book">Book</option>
+                        <option value="inproceedings">In Proceedings</option>
+                        <option value="incollection">In Collection</option>
+                        <option value="phdthesis">PhD Thesis</option>
+                        <option value="mastersthesis">Master's Thesis</option>
+                        <option value="misc">Misc</option>
+                        <option value="techreport">Tech Report</option>
+                        <option value="unpublished">Unpublished</option>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <label for="entry-citekey">Citekey:</label>
+                    <div class="input-with-button">
+                        <input type="text" id="entry-citekey" placeholder="e.g., jcp_123_456_2024">
+                        <button id="btn-generate-citekey" class="btn btn-small" title="Auto-generate from journal, volume, page, year">Generate</button>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <label for="entry-author">Authors:</label>
+                    <input type="text" id="entry-author" placeholder="Last1, First1 and Last2, First2 and ...">
+                </div>
+
+                <div class="form-row">
+                    <label for="entry-title">Title:</label>
+                    <input type="text" id="entry-title" placeholder="Article title">
+                </div>
+
+                <div class="form-row form-row-checkbox">
+                    <label>
+                        <input type="checkbox" id="entry-clean-title">
+                        Apply title formatting (wrap acronyms, formulas in braces for LaTeX)
+                    </label>
+                </div>
+
+                <!-- Article fields -->
+                <div class="form-row field-article field-incollection">
+                    <label for="entry-journal">Journal:</label>
+                    <input type="text" id="entry-journal" placeholder="Journal name">
+                </div>
+
+                <!-- Book fields -->
+                <div class="form-row field-book field-incollection field-inproceedings">
+                    <label for="entry-booktitle">Book/Proceedings Title:</label>
+                    <input type="text" id="entry-booktitle" placeholder="Book or proceedings title">
+                </div>
+
+                <div class="form-row field-book field-incollection field-inproceedings field-techreport">
+                    <label for="entry-publisher">Publisher:</label>
+                    <input type="text" id="entry-publisher" placeholder="Publisher name">
+                </div>
+
+                <!-- Thesis fields -->
+                <div class="form-row field-phdthesis field-mastersthesis">
+                    <label for="entry-school">School/Institution:</label>
+                    <input type="text" id="entry-school" placeholder="University or institution">
+                </div>
+
+                <div class="form-row">
+                    <label for="entry-year">Year:</label>
+                    <input type="text" id="entry-year" placeholder="2024">
+                </div>
+
+                <div class="form-row field-article field-incollection">
+                    <label for="entry-volume">Volume:</label>
+                    <input type="text" id="entry-volume" placeholder="123">
+                </div>
+
+                <div class="form-row field-article field-incollection">
+                    <label for="entry-number">Number/Issue:</label>
+                    <input type="text" id="entry-number" placeholder="4">
+                </div>
+
+                <div class="form-row field-article field-incollection field-inproceedings">
+                    <label for="entry-pages">Pages:</label>
+                    <input type="text" id="entry-pages" placeholder="123-456 or article number">
+                </div>
+
+                <div class="form-row">
+                    <label for="entry-doi">DOI:</label>
+                    <div class="input-with-button">
+                        <input type="text" id="entry-doi" placeholder="10.xxxx/xxxxx">
+                        <button id="btn-refresh-from-doi" class="btn btn-small btn-secondary" title="Fetch metadata from DOI and repopulate fields">Refresh from DOI</button>
+                    </div>
+                </div>
+
+                <div class="form-row field-misc">
+                    <label for="entry-howpublished">How Published:</label>
+                    <input type="text" id="entry-howpublished" placeholder="e.g., arXiv:2103.12345">
+                </div>
+
+                <div class="form-row field-misc">
+                    <label for="entry-eprint">eprint:</label>
+                    <input type="text" id="entry-eprint" placeholder="arXiv ID">
+                </div>
+
+                <div class="form-row">
+                    <label for="entry-url">URL:</label>
+                    <input type="text" id="entry-url" placeholder="https://...">
+                </div>
+
+                <div class="form-row">
+                    <label for="entry-note">Note:</label>
+                    <textarea id="entry-note" rows="2" placeholder="Additional notes"></textarea>
+                </div>
+
+                <div class="form-row">
+                    <label for="entry-abstract">Abstract:</label>
+                    <textarea id="entry-abstract" rows="4" placeholder="Abstract text (optional)"></textarea>
+                </div>
+            </div>
+        </section>
+
+        <!-- Import View -->
+        <section id="view-import" class="view">
+            <div class="import-form">
+                <h2>Import BibTeX File</h2>
+                
+                <div id="import-upload" class="import-step">
+                    <div class="file-upload">
+                        <input type="file" id="import-file" accept=".bib">
+                        <label for="import-file" class="btn btn-primary">Choose .bib File</label>
+                    </div>
+                    <p class="hint">Select a BibTeX file to import and merge with existing entries</p>
+                    <div id="import-status" class="status"></div>
+                    <button id="btn-import-cancel" class="btn btn-secondary">Cancel</button>
+                </div>
+
+                <div id="import-preview" class="import-step" style="display: none;">
+                    <div class="import-summary">
+                        <div class="summary-item summary-new">
+                            <span class="count" id="import-new-count">0</span>
+                            <span class="label">New Entries</span>
+                        </div>
+                        <div class="summary-item summary-skip">
+                            <span class="count" id="import-dup-count">0</span>
+                            <span class="label">Duplicates (skip)</span>
+                        </div>
+                        <div class="summary-item summary-conflict">
+                            <span class="count" id="import-conflict-count">0</span>
+                            <span class="label">Conflicts</span>
+                        </div>
+                    </div>
+
+                    <div id="import-conflicts" class="conflicts-list" style="display: none;">
+                        <h3>Conflicts to Resolve</h3>
+                        <div id="conflicts-container"></div>
+                    </div>
+
+                    <div id="import-new-entries" class="new-entries-list">
+                        <h3>New Entries to Add</h3>
+                        <div id="new-entries-container"></div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button id="btn-import-confirm" class="btn btn-primary">Import Selected</button>
+                        <button id="btn-import-back" class="btn btn-secondary">Back</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="modal-delete" class="modal">
+        <div class="modal-content">
+            <h3>Confirm Delete</h3>
+            <p>Are you sure you want to delete entry <strong id="delete-citekey"></strong>?</p>
+            <div class="modal-actions">
+                <button id="btn-delete-confirm" class="btn btn-danger">Delete</button>
+                <button id="btn-delete-cancel" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Spinner -->
+    <div id="loading" class="loading-overlay" style="display: none;">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <div id="progress-container" class="progress-container" style="display: none;">
+                <div class="progress-text" id="progress-text">0 / 0</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <button id="btn-stop-operation" class="btn btn-secondary btn-stop">Stop</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+# BibTeX Manager - Apache Configuration
+# 
+# SETUP INSTRUCTIONS:
+# 1. Rename this file to .htaccess
+# 2. Update AuthUserFile path to your server's absolute path
+# 3. Generate .htpasswd using: htpasswd -c .htpasswd yourusername
+#    Or use cPanel → Security → Password Protect Directories
+
+# Enable HTTP Basic Authentication
+AuthType Basic
+AuthName "BibTeX Manager"
+AuthUserFile /home/yourusername/public_html/biblio/.htpasswd
+Require valid-user
+
+# Deny access to .htpasswd and backup files
+<FilesMatch "^\.ht|\.bak$">
+    Require all denied
+</FilesMatch>
+
+# PHP settings (adjust as needed)
+<IfModule mod_php.c>
+    php_value upload_max_filesize 10M
+    php_value post_max_size 10M
+    php_value max_execution_time 60
+</IfModule>
+
+# Enable compression for text files
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/css application/javascript application/json text/plain
+</IfModule>
+
+# Security headers
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+</IfModule>
