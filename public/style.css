@@ -711,6 +711,207 @@ body[data-entry-type="unpublished"] .field-unpublished {
     margin-bottom: 1.5rem;
 }
 
+/* Validation modal */
+.modal-validate {
+    max-width: 600px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.modal-validate .success {
+    color: #27ae60;
+    font-weight: 500;
+}
+
+.modal-validate .warning {
+    color: #e67e22;
+    margin-bottom: 1rem;
+}
+
+.validate-issues {
+    max-height: 50vh;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 0.5rem;
+}
+
+.validate-entry {
+    padding: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.validate-entry:last-child {
+    border-bottom: none;
+}
+
+.validate-entry.fixed {
+    opacity: 0.5;
+    background: rgba(39, 174, 96, 0.1);
+}
+
+.validate-entry-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.validate-entry strong {
+    color: var(--primary-color);
+    cursor: pointer;
+}
+
+.validate-entry ul {
+    margin: 0.25rem 0 0 1.5rem;
+    padding: 0;
+}
+
+.validate-entry li {
+    color: #c0392b;
+    font-size: 0.9em;
+}
+
+.btn-small {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.8em;
+}
+
+.btn-fix-doi {
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    cursor: pointer;
+}
+
+.btn-fix-doi:hover {
+    background: var(--primary-hover);
+}
+
+.btn-fix-doi:disabled {
+    opacity: 0.7;
+    cursor: wait;
+}
+
+.btn-fix-doi.btn-success {
+    background: #27ae60;
+}
+
+.btn-fix-doi.btn-danger {
+    background: #e74c3c;
+}
+
+/* Find DOI button and results */
+.btn-find-doi {
+    background: var(--secondary-color);
+    color: white;
+    border: none;
+    cursor: pointer;
+}
+
+.btn-find-doi:hover {
+    background: var(--secondary-hover);
+}
+
+.btn-find-doi:disabled {
+    opacity: 0.7;
+    cursor: wait;
+}
+
+.doi-search-results {
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    background: #f8f9fa;
+    border-radius: var(--border-radius);
+    border: 1px solid var(--border-color);
+}
+
+.doi-results-list p {
+    margin-bottom: 0.5rem;
+    font-size: 0.9em;
+}
+
+.doi-result-item {
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+    background: white;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.doi-result-item:hover {
+    border-color: var(--primary-color);
+    background: #f0f7ff;
+}
+
+.doi-result-title {
+    font-weight: 500;
+    font-size: 0.9em;
+    margin-bottom: 0.25rem;
+}
+
+.doi-result-meta {
+    font-size: 0.8em;
+    color: var(--text-muted);
+}
+
+.doi-result-doi {
+    font-size: 0.75em;
+    color: var(--primary-color);
+    font-family: monospace;
+    margin-top: 0.25rem;
+}
+
+.doi-search-results .success {
+    color: var(--success-color);
+}
+
+.doi-search-results .error {
+    color: var(--danger-color);
+}
+
+.btn-cancel-search {
+    margin-top: 0.5rem;
+    background: var(--secondary-color);
+    color: white;
+}
+
+/* Existing entry info for comparison */
+.existing-entry-info {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 4px;
+    padding: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.existing-entry-info p {
+    margin-bottom: 0.25rem;
+    font-size: 0.85em;
+}
+
+.existing-title {
+    font-weight: 500;
+    font-size: 0.9em;
+    margin-bottom: 0.25rem;
+}
+
+.existing-meta {
+    font-size: 0.8em;
+    color: var(--text-muted);
+}
+
+/* Year match highlighting */
+.doi-result-item.year-match {
+    border-color: var(--success-color);
+    background: #f0fff4;
+}
+
+.doi-result-item.year-match:hover {
+    background: #dcfce7;
+}
+
 /* Loading overlay */
 .loading-overlay {
     position: fixed;

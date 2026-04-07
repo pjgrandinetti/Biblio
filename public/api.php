@@ -13,7 +13,7 @@ header('Cache-Control: no-cache, no-store, must-revalidate');
 define('BIB_FILE', __DIR__ . '/refs.bib');
 define('BACKUP_FILE', __DIR__ . '/refs.bib.bak');
 define('SESSION_LOCK_FILE', __DIR__ . '/.session_lock');
-define('SESSION_LOCK_TIMEOUT', 30 * 60); // 30 minutes in seconds
+define('SESSION_LOCK_TIMEOUT', 5 * 60); // 5 minutes in seconds
 
 /**
  * BibTeX Parser Class
@@ -103,27 +103,74 @@ class BibTeXParser {
     
     /**
      * Parse fields from the entry content
+     * Properly handles = signs inside braced/quoted values
      */
     private static function parseFields(string $fieldsStr, array $strings): array {
         $fields = [];
+        $len = strlen($fieldsStr);
+        $i = 0;
         
-        // Match field = value patterns
-        // Value can be: "quoted", {braced}, or bare (for @string refs or numbers)
-        $pattern = '/(\w+)\s*=\s*/';
-        preg_match_all($pattern, $fieldsStr, $matches, PREG_OFFSET_CAPTURE);
-        
-        for ($i = 0; $i < count($matches[0]); $i++) {
-            $fieldName = strtolower($matches[1][$i][0]);
-            $valueStart = $matches[0][$i][1] + strlen($matches[0][$i][0]);
+        while ($i < $len) {
+            // Skip whitespace and commas
+            while ($i < $len && (ctype_space($fieldsStr[$i]) || $fieldsStr[$i] === ',')) {
+                $i++;
+            }
+            if ($i >= $len) break;
             
-            // Determine end position (next field or end of string)
-            $nextFieldPos = ($i + 1 < count($matches[0])) 
-                ? $matches[0][$i + 1][1] 
-                : strlen($fieldsStr);
+            // Match field name (word characters)
+            $fieldStart = $i;
+            while ($i < $len && (ctype_alnum($fieldsStr[$i]) || $fieldsStr[$i] === '-' || $fieldsStr[$i] === '_')) {
+                $i++;
+            }
+            if ($i === $fieldStart) {
+                // No field name found, skip character
+                $i++;
+                continue;
+            }
+            $fieldName = strtolower(substr($fieldsStr, $fieldStart, $i - $fieldStart));
             
-            $valueStr = trim(substr($fieldsStr, $valueStart, $nextFieldPos - $valueStart));
+            // Skip whitespace
+            while ($i < $len && ctype_space($fieldsStr[$i])) {
+                $i++;
+            }
             
-            // Remove trailing comma if present
+            // Expect '='
+            if ($i >= $len || $fieldsStr[$i] !== '=') {
+                // Not a valid field assignment, skip
+                continue;
+            }
+            $i++; // Skip '='
+            
+            // Skip whitespace
+            while ($i < $len && ctype_space($fieldsStr[$i])) {
+                $i++;
+            }
+            
+            // Parse value - track braces and quotes properly
+            $valueStart = $i;
+            $braceDepth = 0;
+            $inQuotes = false;
+            
+            while ($i < $len) {
+                $char = $fieldsStr[$i];
+                
+                if ($char === '"' && $braceDepth === 0) {
+                    $inQuotes = !$inQuotes;
+                } elseif ($char === '{' && !$inQuotes) {
+                    $braceDepth++;
+                } elseif ($char === '}' && !$inQuotes) {
+                    $braceDepth--;
+                    if ($braceDepth < 0) $braceDepth = 0; // Safety
+                } elseif ($char === ',' && $braceDepth === 0 && !$inQuotes) {
+                    // End of this field's value
+                    break;
+                }
+                $i++;
+            }
+            
+            $valueStr = trim(substr($fieldsStr, $valueStart, $i - $valueStart));
+            
+            // Remove trailing comma if present (shouldn't be, but safety)
             $valueStr = rtrim($valueStr, ", \t\n\r");
             
             // Parse the value
@@ -268,6 +315,37 @@ class BibTeXParser {
  * Format: journalabbr_volume_page_year
  */
 function generateCitekey(array $fields): string {
+    // Check for arXiv entry - use arxiv_{id}_{year}
+    // Detect by DOI, archiveprefix, or eprint containing arXiv ID pattern
+    $archiveprefix = $fields['archiveprefix'] ?? '';
+    $eprint = $fields['eprint'] ?? '';
+    $doi = $fields['doi'] ?? '';
+    $arxivId = null;
+    
+    // Check DOI first (10.48550/arXiv.2102.09844 or 10.48550/ARXIV.2102.09844)
+    if (preg_match('/^10\.48550\/arXiv\.(\d{4}\.\d{4,5})/i', $doi, $matches)) {
+        $arxivId = $matches[1];
+    } elseif (strtolower($archiveprefix) === 'arxiv' || preg_match('/^arXiv:/i', $eprint)) {
+        // Extract ID from eprint field (may be "arXiv:2102.09844" or just "2102.09844")
+        $arxivId = preg_replace('/^arXiv:/i', '', $eprint);
+    } elseif (preg_match('/^(\d{4}\.\d{4,5})(v\d+)?$/', $eprint, $matches)) {
+        $arxivId = $matches[1];
+    }
+    
+    if ($arxivId) {
+        // Replace dots with underscores for cleaner citekey
+        // arXiv ID is globally unique, no need for year suffix
+        $cleanId = str_replace('.', '_', $arxivId);
+        return 'arxiv_' . $cleanId;
+    }
+    
+    // Check for Zenodo entry - use zenodo_{id}_{year}
+    if (preg_match('/^10\.5281\/zenodo\.(\d+)$/i', $doi, $matches)) {
+        $zenodoId = $matches[1];
+        $year = $fields['year'] ?? date('Y');
+        return 'zenodo_' . $zenodoId . '_' . $year;
+    }
+    
     $journal = $fields['journal'] ?? '';
     $volume = $fields['volume'] ?? '';
     $pages = $fields['pages'] ?? ($fields['article-number'] ?? '');
@@ -299,8 +377,11 @@ function generateCitekey(array $fields): string {
     if ($year) $parts[] = $year;
     
     if (empty($parts)) {
-        // Fallback: use author + year
-        $author = $fields['author'] ?? 'unknown';
+        // Fallback: use author (or editor if no author) + year
+        $author = $fields['author'] ?? '';
+        if (empty($author)) {
+            $author = $fields['editor'] ?? 'unknown';
+        }
         $firstAuthor = preg_split('/\s+and\s+/i', $author)[0];
         // Get last name
         if (strpos($firstAuthor, ',') !== false) {
@@ -355,11 +436,101 @@ function loadProperNames(): array {
 }
 
 /**
+ * Convert all-caps title to proper title case
+ * Handles common lowercase words and preserves important uppercase patterns
+ */
+function convertToTitleCase(string $title): string {
+    // Words that should be lowercase (unless first word)
+    $lowercaseWords = ['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 
+                       'to', 'by', 'of', 'in', 'with', 'as', 'vs', 'via'];
+    
+    // Chemical elements that should stay uppercase when standalone
+    $elements = ['H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', 'Na', 'Mg', 'Al', 
+                 'Si', 'P', 'S', 'Cl', 'Ar', 'K', 'Ca', 'Fe', 'Cu', 'Zn', 'Br', 'I', 'Se'];
+    
+    // Split by word boundaries but preserve delimiters  
+    // Include various hyphen/dash characters: -, –, —, ‐ (U+2010 hyphen)
+    $parts = preg_split('/(\s+|[-–—‐:;,.])/u', $title, -1, PREG_SPLIT_DELIM_CAPTURE);
+    $result = [];
+    $isFirst = true;
+    
+    foreach ($parts as $part) {
+        // Skip empty parts and delimiters
+        if (trim($part) === '' || preg_match('/^[\s\-–—‐:;,.]+$/u', $part)) {
+            $result[] = $part;
+            // After colon, next word should be capitalized
+            if (strpos($part, ':') !== false) {
+                $isFirst = true;
+            }
+            continue;
+        }
+        
+        $lowerPart = strtolower($part);
+        
+        // Check if it's a chemical element (1-2 letters)
+        if (in_array($part, $elements) || in_array(ucfirst($lowerPart), $elements)) {
+            $result[] = ucfirst($lowerPart);
+        }
+        // Roman numerals - keep uppercase
+        elseif (preg_match('/^[IVXLCDM]+$/i', $part) && strlen($part) <= 5) {
+            $result[] = strtoupper($part);
+        }
+        // First word or not a common lowercase word - capitalize
+        elseif ($isFirst || !in_array($lowerPart, $lowercaseWords)) {
+            $result[] = ucfirst($lowerPart);
+        }
+        // Common lowercase word
+        else {
+            $result[] = $lowerPart;
+        }
+        
+        $isFirst = false;
+    }
+    
+    return implode('', $result);
+}
+
+/**
  * Clean title: wrap capitalized words and formulas in braces, convert HTML to LaTeX
  */
 function cleanTitle(string $title): string {
     // Convert HTML entities
     $title = html_entity_decode($title, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    
+    // Detect all-caps titles and convert to title case
+    // Only letters count - ignore numbers, symbols, spaces
+    $letters = preg_replace('/[^a-zA-Z]/', '', $title);
+    $uppercase = preg_replace('/[^A-Z]/', '', $letters);
+    // If >80% of letters are uppercase, it's likely an all-caps title from old sources
+    if (strlen($letters) > 10 && strlen($uppercase) / strlen($letters) > 0.8) {
+        $title = convertToTitleCase($title);
+    }
+    
+    // Convert MathML isotope notation to LaTeX
+    // Pattern: <mml:mmultiscripts><mml:mi>ELEMENT</mml:mi><mml:mprescripts/><mml:none/><mml:mn>MASS</mml:mn></mml:mmultiscripts>
+    $title = preg_replace_callback('/<mml:math[^>]*>.*?<mml:mmultiscripts><mml:mi[^>]*>([A-Za-z]+)<\/mml:mi><mml:mprescripts\/?><mml:none\/?><mml:mn>(\d+)<\/mml:mn><\/mml:mmultiscripts>.*?<\/mml:math>/si',
+        function($m) { return '{$^{' . $m[2] . '}$' . $m[1] . '}'; }, $title);
+    
+    // Convert MathML presuperscript notation: <msup><mrow/><mrow><mn>N</mn></mrow></msup><mi>X</mi> -> $^{N}$X
+    // Used for coupling constants like ²J, ³J in NMR
+    $title = preg_replace_callback('/<mml:math[^>]*>.*?<mml:msup>\s*<mml:mrow\s*\/?>\s*<mml:mrow>\s*<mml:mn>(\d+)<\/mml:mn>\s*<\/mml:mrow>\s*<\/mml:msup>\s*<mml:mi>([A-Za-z]+)<\/mml:mi>.*?<\/mml:math>/si',
+        function($m) { return '{$^{' . $m[1] . '}' . $m[2] . '$}'; }, $title);
+    
+    // Convert general MathML with msup (superscript): <msup><mi>X</mi><mn>N</mn></msup> -> X$^{N}$
+    $title = preg_replace_callback('/<mml:math[^>]*>.*?<mml:msup>\s*<mml:mi>([A-Za-z]+)<\/mml:mi>\s*<mml:mn>(\d+)<\/mml:mn>\s*<\/mml:msup>.*?<\/mml:math>/si',
+        function($m) { return $m[1] . '$^{' . $m[2] . '}$'; }, $title);
+    
+    // Convert general MathML with msub (subscript): <msub><mi>X</mi><mn>N</mn></msub> -> X$_{N}$
+    $title = preg_replace_callback('/<mml:math[^>]*>.*?<mml:msub>\s*<mml:mi>([A-Za-z]+)<\/mml:mi>\s*<mml:mn>(\d+)<\/mml:mn>\s*<\/mml:msub>.*?<\/mml:math>/si',
+        function($m) { return $m[1] . '$_{' . $m[2] . '}$'; }, $title);
+    
+    // Strip any remaining MathML tags but keep the text content
+    $title = preg_replace('/<mml:[^>]+>/i', '', $title);
+    $title = preg_replace('/<\/mml:[^>]+>/i', '', $title);
+    
+    // Normalize whitespace (MathML often has excessive spacing)
+    $title = preg_replace('/\s+/', ' ', $title);
+    $title = trim($title);
     
     // Convert degree symbol to LaTeX and protect capitalization
     // Handle temperatures like 22°C, 22 °C, 590°C → {22$^\circ$C}
@@ -670,6 +841,18 @@ function handleRequest(): void {
         return;
     }
     
+    if ($action === 'force_unlock') {
+        // Allow user to forcefully take over the lock
+        // Useful for single-user scenarios where an old lock is stuck
+        if (!$sessionId) {
+            errorResponse('Session ID required');
+        }
+        @unlink(SESSION_LOCK_FILE);
+        acquireSessionLock($sessionId);
+        jsonResponse(['success' => true]);
+        return;
+    }
+    
     // All other actions require a valid session
     if (!$sessionId) {
         errorResponse('Session ID required', 401);
@@ -845,6 +1028,40 @@ function handleRequest(): void {
                 jsonResponse(['citekey' => $citekey]);
                 break;
                 
+            case 'clean_title':
+                // Clean title for a single entry
+                $citekey = $input['citekey'] ?? '';
+                if (!$citekey) {
+                    errorResponse('Citekey required');
+                }
+                
+                $entries = readBibFile();
+                $found = false;
+                $changed = false;
+                
+                foreach ($entries as &$entry) {
+                    if ($entry['citekey'] === $citekey) {
+                        $found = true;
+                        if (isset($entry['fields']['title'])) {
+                            $original = $entry['fields']['title'];
+                            $entry['fields']['title'] = cleanTitle($original);
+                            $changed = ($entry['fields']['title'] !== $original);
+                        }
+                        break;
+                    }
+                }
+                
+                if (!$found) {
+                    errorResponse('Entry not found: ' . $citekey);
+                }
+                
+                if ($changed) {
+                    writeBibFile($entries);
+                }
+                
+                jsonResponse(['success' => true, 'changed' => $changed]);
+                break;
+                
             case 'clean_all_titles':
                 $entries = readBibFile();
                 $cleaned = 0;
@@ -861,6 +1078,159 @@ function handleRequest(): void {
                 
                 writeBibFile($entries);
                 jsonResponse(['success' => true, 'cleanedCount' => $cleaned, 'totalCount' => count($entries)]);
+                break;
+            
+            case 'search_doi':
+                $query = $input['query'] ?? '';
+                if (!$query) {
+                    errorResponse('Search query required');
+                }
+                
+                // Search CrossRef for DOIs matching the query
+                $url = 'https://api.crossref.org/works?' . http_build_query([
+                    'query.bibliographic' => $query,
+                    'rows' => 5
+                ]);
+                
+                $context = stream_context_create([
+                    'http' => [
+                        'method' => 'GET',
+                        'header' => "Accept: application/json\r\nUser-Agent: BibTeXManager/1.0 (mailto:user@example.com)\r\n",
+                        'timeout' => 15
+                    ]
+                ]);
+                
+                $response = @file_get_contents($url, false, $context);
+                if ($response === false) {
+                    errorResponse('CrossRef search failed');
+                }
+                
+                $data = json_decode($response, true);
+                if (!$data || !isset($data['message']['items'])) {
+                    errorResponse('Invalid CrossRef response');
+                }
+                
+                $results = [];
+                foreach ($data['message']['items'] as $item) {
+                    $authorNames = [];
+                    if (isset($item['author'])) {
+                        foreach ($item['author'] as $a) {
+                            $authorNames[] = $a['family'] ?? $a['name'] ?? '';
+                        }
+                    }
+                    $results[] = [
+                        'doi' => $item['DOI'] ?? '',
+                        'title' => ($item['title'][0] ?? 'No title'),
+                        'authors' => implode(', ', $authorNames),
+                        'year' => $item['published']['date-parts'][0][0] ?? $item['issued']['date-parts'][0][0] ?? '',
+                        'journal' => $item['container-title'][0] ?? ''
+                    ];
+                }
+                
+                jsonResponse(['results' => $results]);
+                break;
+            
+            case 'lookup_doi':
+                $doi = $input['doi'] ?? '';
+                if (!$doi) {
+                    errorResponse('DOI required');
+                }
+                
+                // Clean DOI
+                $doi = preg_replace('/^https?:\/\/(dx\.)?doi\.org\//', '', trim($doi));
+                $doi = preg_replace('/[{}]/', '', $doi);
+                
+                // Determine if DataCite or CrossRef
+                $useDataCite = preg_match('/^10\.(5281|48550|5072|7910|17632|6084|5067|5061)\//', $doi);
+                $isArxiv = str_starts_with($doi, '10.48550/');
+                
+                $context = stream_context_create([
+                    'http' => [
+                        'method' => 'GET',
+                        'header' => "Accept: application/json\r\nUser-Agent: BibTeXManager/1.0 (mailto:user@example.com)\r\n",
+                        'timeout' => 15
+                    ]
+                ]);
+                
+                $work = null;
+                
+                if ($useDataCite) {
+                    $url = "https://api.datacite.org/dois/" . urlencode($doi);
+                    $response = @file_get_contents($url, false, $context);
+                    if ($response === false) {
+                        errorResponse('DataCite lookup failed');
+                    }
+                    $data = json_decode($response, true);
+                    if (!$data || !isset($data['data']['attributes'])) {
+                        errorResponse('Invalid DataCite response');
+                    }
+                    $attrs = $data['data']['attributes'];
+                    
+                    // Convert DataCite to common format
+                    $work = [
+                        'author' => [],
+                        'title' => $attrs['titles'][0]['title'] ?? null,
+                        'container-title' => $attrs['container']['title'] ?? null,
+                        'year' => $attrs['publicationYear'] ?? null,
+                        'publisher' => $attrs['publisher'] ?? null,
+                        'arxivId' => null
+                    ];
+                    
+                    if (isset($attrs['creators'])) {
+                        foreach ($attrs['creators'] as $creator) {
+                            if (isset($creator['familyName']) && isset($creator['givenName'])) {
+                                $work['author'][] = ['family' => $creator['familyName'], 'given' => $creator['givenName']];
+                            } elseif (isset($creator['name'])) {
+                                $work['author'][] = ['name' => $creator['name']];
+                            }
+                        }
+                    }
+                    
+                    if ($isArxiv && isset($attrs['identifiers'])) {
+                        foreach ($attrs['identifiers'] as $id) {
+                            if (($id['identifierType'] ?? '') === 'arXiv') {
+                                $work['arxivId'] = $id['identifier'];
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    $url = "https://api.crossref.org/works/" . urlencode($doi);
+                    $response = @file_get_contents($url, false, $context);
+                    if ($response === false) {
+                        errorResponse('CrossRef lookup failed');
+                    }
+                    $data = json_decode($response, true);
+                    if (!$data || !isset($data['message'])) {
+                        errorResponse('Invalid CrossRef response');
+                    }
+                    $msg = $data['message'];
+                    
+                    $work = [
+                        'author' => $msg['author'] ?? [],
+                        'editor' => $msg['editor'] ?? [],
+                        'title' => $msg['title'][0] ?? null,
+                        'short-container-title' => $msg['short-container-title'][0] ?? null,
+                        'container-title' => $msg['container-title'][0] ?? null,
+                        'year' => $msg['published']['date-parts'][0][0] ?? $msg['issued']['date-parts'][0][0] ?? null,
+                        'volume' => $msg['volume'] ?? null,
+                        'issue' => $msg['issue'] ?? null,
+                        'page' => $msg['page'] ?? null,
+                        'article-number' => $msg['article-number'] ?? null,
+                        'ISSN' => $msg['ISSN'][0] ?? null,
+                        'ISBN' => $msg['ISBN'][0] ?? null,
+                        'publisher' => $msg['publisher'] ?? null,
+                        'type' => $msg['type'] ?? null,
+                        'edition' => $msg['edition-number'] ?? null
+                    ];
+                }
+                
+                jsonResponse([
+                    'work' => $work,
+                    'doi' => $doi,
+                    'useDataCite' => $useDataCite,
+                    'isArxiv' => $isArxiv
+                ]);
                 break;
                 
             default:

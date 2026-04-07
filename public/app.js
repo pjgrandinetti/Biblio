@@ -7,12 +7,12 @@
 
     // ==================== State ====================
     
-    // Generate or retrieve session ID
+    // Generate or retrieve session ID (use localStorage to persist across browser restarts)
     function getSessionId() {
-        let sessionId = sessionStorage.getItem('biblio_session_id');
+        let sessionId = localStorage.getItem('biblio_session_id');
         if (!sessionId) {
             sessionId = 'sess_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
-            sessionStorage.setItem('biblio_session_id', sessionId);
+            localStorage.setItem('biblio_session_id', sessionId);
         }
         return sessionId;
     }
@@ -52,6 +52,7 @@
         btnImport: document.getElementById('btn-import'),
         btnCleanTitles: document.getElementById('btn-clean-titles'),
         btnRefreshAllDois: document.getElementById('btn-refresh-all-dois'),
+        btnValidate: document.getElementById('btn-validate'),
         
         // List view
         searchInput: document.getElementById('search-input'),
@@ -115,6 +116,12 @@
         modalLocked: document.getElementById('modal-locked'),
         lockedMinutes: document.getElementById('locked-minutes'),
         btnLockedRetry: document.getElementById('btn-locked-retry'),
+        btnLockedForce: document.getElementById('btn-locked-force'),
+        
+        // Validate modal
+        modalValidate: document.getElementById('modal-validate'),
+        validateResults: document.getElementById('validate-results'),
+        btnValidateClose: document.getElementById('btn-validate-close'),
         
         // Loading
         loading: document.getElementById('loading')
@@ -177,6 +184,25 @@
         // Pattern: <mml:math...><mml:mmultiscripts><mml:mi...>ELEMENT</mml:mi><mml:mprescripts/><mml:none/><mml:mn>MASS</mml:mn></mml:mmultiscripts></mml:math>
         result = result.replace(/<mml:math[^>]*><mml:mmultiscripts><mml:mi[^>]*>([A-Za-z]+)<\/mml:mi><mml:mprescripts\/?><mml:none\/?><mml:mn>(\d+)<\/mml:mn><\/mml:mmultiscripts><\/mml:math>/gi,
             (match, elem, mass) => `{$^{${mass}}$${elem}}`);
+        
+        // Convert MathML presuperscript notation: <msup><mrow/><mrow><mn>N</mn></mrow></msup><mi>X</mi> -> $^{N}$X
+        // Used for coupling constants like ²J, ³J in NMR
+        result = result.replace(/<mml:math[^>]*>[\s\S]*?<mml:msup>\s*<mml:mrow\s*\/?>\s*<mml:mrow>\s*<mml:mn>(\d+)<\/mml:mn>\s*<\/mml:mrow>\s*<\/mml:msup>\s*<mml:mi>([A-Za-z]+)<\/mml:mi>[\s\S]*?<\/mml:math>/gi,
+            (match, num, variable) => `{$^{${num}}${variable}$}`);
+        
+        // Convert general MathML with msup (superscript): <msup><mi>X</mi><mn>N</mn></msup> -> X$^{N}$
+        result = result.replace(/<mml:math[^>]*>[\s\S]*?<mml:msup>\s*<mml:mi>([A-Za-z]+)<\/mml:mi>\s*<mml:mn>(\d+)<\/mml:mn>\s*<\/mml:msup>[\s\S]*?<\/mml:math>/gi,
+            (match, base, exp) => `${base}$^{${exp}}$`);
+        
+        // Convert general MathML with msub (subscript): <msub><mi>X</mi><mn>N</mn></msub> -> X$_{N}$
+        result = result.replace(/<mml:math[^>]*>[\s\S]*?<mml:msub>\s*<mml:mi>([A-Za-z]+)<\/mml:mi>\s*<mml:mn>(\d+)<\/mml:mn>\s*<\/mml:msub>[\s\S]*?<\/mml:math>/gi,
+            (match, base, sub) => `${base}$_{${sub}}$`);
+        
+        // Strip any remaining MathML tags but keep the text content
+        result = result.replace(/<mml:[^>]+>/gi, '').replace(/<\/mml:[^>]+>/gi, '');
+        
+        // Normalize whitespace (MathML often has excessive spacing)
+        result = result.replace(/\s+/g, ' ').trim();
         
         // Convert HTML isotope notation: <sup>17</sup>O -> {$^{17}$O}
         // Add space before if preceded by non-space character
@@ -256,6 +282,54 @@
         result = result.replace(/\b(Part|Section|Volume|Chapter|Phase|Type|Figure|Table|Fig|Tab|No|Nr)\s+([IVXLCDM]+)\b/gi, '$1 {$2}');
         
         return result;
+    }
+
+    /**
+     * Format a list of people (authors or editors) from CrossRef/DataCite format to BibTeX format
+     * @param {Array} people - Array of person objects with {family, given} or {name}
+     * @returns {string} BibTeX-formatted author/editor string
+     */
+    function formatPersonList(people) {
+        if (!people || !Array.isArray(people) || people.length === 0) {
+            return '';
+        }
+        return people.map(p => {
+            if (p.family && p.given) {
+                return `${p.family}, ${p.given}`;
+            }
+            return p.name || p.family || '';
+        }).filter(Boolean).join(' and ');
+    }
+
+    /**
+     * Determine BibTeX entry type from CrossRef/DataCite work type
+     * @param {string} crossrefType - CrossRef type like 'journal-article', 'book', 'edited-book'
+     * @param {object} work - The work object for additional context
+     * @returns {string} BibTeX entry type
+     */
+    function detectEntryType(crossrefType, work) {
+        if (!crossrefType) return 'article';
+        
+        const typeMap = {
+            'journal-article': 'article',
+            'article': 'article',
+            'proceedings-article': 'inproceedings',
+            'book': 'book',
+            'edited-book': 'book',
+            'monograph': 'book',
+            'reference-book': 'book',
+            'book-chapter': 'incollection',
+            'book-section': 'incollection',
+            'book-part': 'incollection',
+            'report': 'techreport',
+            'dissertation': 'phdthesis',
+            'posted-content': 'misc',
+            'dataset': 'misc',
+            'component': 'misc',
+            'peer-review': 'misc'
+        };
+        
+        return typeMap[crossrefType] || 'misc';
     }
 
     /**
@@ -361,6 +435,45 @@
             console.warn('Semantic Scholar lookup failed:', e);
             return null;
         }
+    }
+
+    /**
+     * Check if a DOI should use DataCite API instead of CrossRef
+     * Returns true for Zenodo (10.5281/zenodo.*) and arXiv (10.48550/*) DOIs
+     */
+    function shouldUseDataCite(doi) {
+        return doi.startsWith('10.5281/zenodo.') || doi.startsWith('10.48550/');
+    }
+
+    /**
+     * Parse DataCite creator into {family, given} object
+     * Handles DataCite's quirk where familyName sometimes contains the full name
+     * and givenName is missing
+     */
+    function parseDataCiteCreator(creator) {
+        // If we have both familyName and givenName, use them
+        if (creator.givenName && creator.familyName) {
+            return { family: creator.familyName, given: creator.givenName };
+        }
+        
+        // If familyName contains a space (full name) or givenName is missing, parse from name
+        if (creator.name) {
+            const nameParts = creator.name.trim().split(/\s+/);
+            if (nameParts.length >= 2) {
+                // Assume last word is family name, rest is given name
+                const family = nameParts.pop();
+                const given = nameParts.join(' ');
+                return { family, given };
+            }
+            // Single word name - use as family name
+            return { family: creator.name, given: '' };
+        }
+        
+        // Fallback to whatever we have
+        return { 
+            family: creator.familyName || '', 
+            given: creator.givenName || '' 
+        };
     }
 
     /**
@@ -624,6 +737,9 @@
     async function saveEntry() {
         const entry = getFormData();
         
+        // Debug: log what we're saving
+        console.log('Saving entry:', JSON.stringify(entry, null, 2));
+        
         if (!entry.citekey) {
             setStatus(elements.formStatus, 'Citekey is required', 'error');
             return;
@@ -641,7 +757,11 @@
                 data.originalCitekey = state.editingCitekey;
             }
             
+            console.log('Request data:', JSON.stringify(data, null, 2));
+            
             const result = await apiCall('save', data);
+            
+            console.log('Save result:', JSON.stringify(result, null, 2));
             
             if (result.warning) {
                 setStatus(elements.formStatus, `Warning: ${result.warning} (${result.existingCitekey})`, 'error');
@@ -652,6 +772,7 @@
             await loadEntries();
             showView('view-list');
         } catch (error) {
+            console.error('Save error:', error);
             setStatus(elements.formStatus, error.message, 'error');
         } finally {
             hideLoading();
@@ -691,40 +812,79 @@
         showLoading();
         
         try {
-            // Fetch CrossRef and Semantic Scholar in parallel
-            const [crossrefResponse, ssTitle] = await Promise.all([
-                fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`),
-                fetchSemanticScholarTitle(doi)
-            ]);
+            const useDataCite = shouldUseDataCite(doi);
+            const isArxiv = doi.startsWith('10.48550/');
+            let work, ssTitle = null;
             
-            if (!crossrefResponse.ok) {
-                if (crossrefResponse.status === 404) {
-                    throw new Error('DOI not found');
+            if (useDataCite) {
+                // Use DataCite API for Zenodo and arXiv DOIs
+                const response = await fetch(`https://api.datacite.org/dois/${encodeURIComponent(doi)}`);
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        throw new Error('DOI not found');
+                    }
+                    throw new Error('Failed to fetch DOI metadata from DataCite');
                 }
-                throw new Error('Failed to fetch DOI metadata');
+                const data = await response.json();
+                const attrs = data.data.attributes;
+                
+                work = {
+                    author: attrs.creators ? attrs.creators.map(parseDataCiteCreator) : null,
+                    title: attrs.titles ? [attrs.titles[0]?.title] : null,
+                    published: attrs.publicationYear ? { 'date-parts': [[attrs.publicationYear]] } : null,
+                    publisher: attrs.publisher
+                };
+                
+                // For arXiv, extract the arXiv ID for the eprint field
+                if (isArxiv && attrs.identifiers) {
+                    const arxivId = attrs.identifiers.find(id => id.identifierType === 'arXiv');
+                    if (arxivId) {
+                        work.arxivId = arxivId.identifier;
+                    }
+                }
+            } else {
+                // Fetch CrossRef and Semantic Scholar in parallel
+                const [crossrefResponse, ssTitleResult] = await Promise.all([
+                    fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`),
+                    fetchSemanticScholarTitle(doi)
+                ]);
+                ssTitle = ssTitleResult;
+                
+                if (!crossrefResponse.ok) {
+                    if (crossrefResponse.status === 404) {
+                        throw new Error('DOI not found');
+                    }
+                    throw new Error('Failed to fetch DOI metadata');
+                }
+                
+                const data = await crossrefResponse.json();
+                work = data.message;
             }
-            
-            const data = await crossrefResponse.json();
-            const work = data.message;
             
             // Keep current citekey
             const currentCitekey = elements.entryCitekey.value;
             
-            // Update entry type
-            elements.entryType.value = 'article';
-            document.body.dataset.entryType = 'article';
+            // Update entry type based on CrossRef type
+            let entryType;
+            if (isArxiv) {
+                entryType = 'article';
+            } else if (useDataCite) {
+                entryType = 'misc';
+            } else {
+                entryType = detectEntryType(work.type, work);
+            }
+            elements.entryType.value = entryType;
+            document.body.dataset.entryType = entryType;
             
             // Build fields object
             const fields = {};
             
-            // Authors
-            if (work.author) {
-                fields.author = work.author.map(a => {
-                    if (a.family && a.given) {
-                        return `${a.family}, ${a.given}`;
-                    }
-                    return a.name || a.family || '';
-                }).filter(Boolean).join(' and ');
+            // Authors - try authors first, fall back to editors
+            if (work.author && work.author.length > 0) {
+                fields.author = formatPersonList(work.author);
+            } else if (work.editor && work.editor.length > 0) {
+                // No authors, use editors (common for edited books)
+                fields.editor = formatPersonList(work.editor);
             }
             
             // Title (convert HTML to LaTeX, pick best between CrossRef and Semantic Scholar)
@@ -733,15 +893,39 @@
             }
             
             // Journal - prefer abbreviated name, with fallback to abbreviation database
-            let journal = null;
-            if (work['short-container-title'] && work['short-container-title'][0]) {
-                journal = work['short-container-title'][0];
-            } else if (work['container-title'] && work['container-title'][0]) {
-                journal = work['container-title'][0];
+            if (!useDataCite && entryType === 'article') {
+                let journal = null;
+                if (work['short-container-title'] && work['short-container-title'][0]) {
+                    journal = work['short-container-title'][0];
+                } else if (work['container-title'] && work['container-title'][0]) {
+                    journal = work['container-title'][0];
+                }
+                if (journal) {
+                    fields.journal = lookupJournalAbbreviation(journal);
+                }
             }
-            // Look up abbreviation (passes through unchanged if not found)
-            if (journal) {
-                fields.journal = lookupJournalAbbreviation(journal);
+            
+            // Publisher (for books, reports, Zenodo, but not arXiv)
+            if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
+                fields.publisher = work.publisher;
+            }
+            
+            // ISBN for books
+            if (!useDataCite && work.ISBN && work.ISBN[0] && (entryType === 'book' || entryType === 'incollection')) {
+                fields.isbn = work.ISBN[0];
+            }
+            
+            // Edition for books
+            if (!useDataCite && work['edition-number'] && (entryType === 'book' || entryType === 'incollection')) {
+                fields.edition = work['edition-number'];
+            }
+            
+            // arXiv-specific fields
+            if (isArxiv) {
+                if (work.arxivId) {
+                    fields.eprint = work.arxivId;
+                }
+                fields.archiveprefix = 'arXiv';
             }
             
             // Year
@@ -757,28 +941,30 @@
                 }
             }
             
-            // Volume
-            if (work.volume) {
+            // Volume (CrossRef only, for articles)
+            if (!useDataCite && work.volume && entryType === 'article') {
                 fields.volume = work.volume;
             }
             
-            // Issue/Number
-            if (work.issue) {
+            // Issue/Number (CrossRef only, for articles)
+            if (!useDataCite && work.issue && entryType === 'article') {
                 fields.number = work.issue;
             }
             
-            // Pages
-            if (work.page) {
-                fields.pages = work.page;
-            } else if (work['article-number']) {
-                fields.pages = work['article-number'];
+            // Pages (CrossRef only)
+            if (!useDataCite) {
+                if (work.page) {
+                    fields.pages = work.page;
+                } else if (work['article-number']) {
+                    fields.pages = work['article-number'];
+                }
             }
             
             // DOI
             fields.doi = doi;
             
-            // ISSN
-            if (work.ISSN && work.ISSN[0]) {
+            // ISSN (CrossRef only, for articles)
+            if (!useDataCite && work.ISSN && work.ISSN[0] && entryType === 'article') {
                 fields.issn = work.ISSN[0];
             }
             
@@ -833,42 +1019,84 @@
         showLoading();
         
         try {
-            // Fetch CrossRef and Semantic Scholar in parallel
-            const [crossrefResponse, ssTitle] = await Promise.all([
-                fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`, {
-                    headers: {
-                        'Accept': 'application/json',
-                        'User-Agent': 'BibTeXManager/1.0 (mailto:user@example.com)'
-                    }
-                }),
-                fetchSemanticScholarTitle(doi)
-            ]);
+            const useDataCite = shouldUseDataCite(doi);
+            const isArxiv = doi.startsWith('10.48550/');
+            let work, ssTitle = null;
             
-            if (!crossrefResponse.ok) {
-                if (crossrefResponse.status === 404) {
-                    throw new Error('DOI not found');
+            if (useDataCite) {
+                // Use DataCite API for Zenodo and arXiv DOIs
+                const response = await fetch(`https://api.datacite.org/dois/${encodeURIComponent(doi)}`);
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        throw new Error('DOI not found');
+                    }
+                    throw new Error('Failed to fetch DOI metadata from DataCite');
                 }
-                throw new Error('Failed to fetch DOI metadata');
+                const data = await response.json();
+                const attrs = data.data.attributes;
+                
+                // Convert DataCite format to work-like structure
+                work = {
+                    author: attrs.creators ? attrs.creators.map(parseDataCiteCreator) : null,
+                    title: attrs.titles ? [attrs.titles[0]?.title] : null,
+                    'container-title': attrs.container ? [attrs.container.title] : null,
+                    published: attrs.publicationYear ? { 'date-parts': [[attrs.publicationYear]] } : null,
+                    publisher: attrs.publisher
+                };
+                
+                // For arXiv, extract the arXiv ID for the eprint field
+                if (isArxiv && attrs.identifiers) {
+                    const arxivId = attrs.identifiers.find(id => id.identifierType === 'arXiv');
+                    if (arxivId) {
+                        work.arxivId = arxivId.identifier;
+                    }
+                }
+            } else {
+                // Fetch CrossRef and Semantic Scholar in parallel
+                const [crossrefResponse, ssTitleResult] = await Promise.all([
+                    fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`, {
+                        headers: {
+                            'Accept': 'application/json',
+                            'User-Agent': 'BibTeXManager/1.0 (mailto:user@example.com)'
+                        }
+                    }),
+                    fetchSemanticScholarTitle(doi)
+                ]);
+                ssTitle = ssTitleResult;
+                
+                if (!crossrefResponse.ok) {
+                    if (crossrefResponse.status === 404) {
+                        throw new Error('DOI not found');
+                    }
+                    throw new Error('Failed to fetch DOI metadata');
+                }
+                
+                const data = await crossrefResponse.json();
+                work = data.message;
             }
             
-            const data = await crossrefResponse.json();
-            const work = data.message;
+            // Determine entry type
+            let entryType;
+            if (isArxiv) {
+                entryType = 'article';
+            } else if (useDataCite) {
+                entryType = 'misc';
+            } else {
+                entryType = detectEntryType(work.type, work);
+            }
             
-            // Parse CrossRef data into BibTeX fields
+            // Parse data into BibTeX fields
             const entry = {
-                type: 'article',
+                type: entryType,
                 citekey: '',
                 fields: {}
             };
             
-            // Authors
-            if (work.author) {
-                entry.fields.author = work.author.map(a => {
-                    if (a.family && a.given) {
-                        return `${a.family}, ${a.given}`;
-                    }
-                    return a.name || a.family || '';
-                }).filter(Boolean).join(' and ');
+            // Authors - try authors first, fall back to editors
+            if (work.author && work.author.length > 0) {
+                entry.fields.author = formatPersonList(work.author);
+            } else if (work.editor && work.editor.length > 0) {
+                entry.fields.editor = formatPersonList(work.editor);
             }
             
             // Title - pick best between CrossRef and Semantic Scholar
@@ -876,16 +1104,41 @@
                 entry.fields.title = pickBetterTitle(work.title[0], ssTitle);
             }
             
-            // Journal - prefer abbreviated name, with fallback to abbreviation database
-            let journal = null;
-            if (work['short-container-title'] && work['short-container-title'][0]) {
-                journal = work['short-container-title'][0];
-            } else if (work['container-title'] && work['container-title'][0]) {
-                journal = work['container-title'][0];
+            // Journal - prefer abbreviated name, with fallback to abbreviation database (for articles only)
+            if (entryType === 'article') {
+                let journal = null;
+                if (work['short-container-title'] && work['short-container-title'][0]) {
+                    journal = work['short-container-title'][0];
+                } else if (work['container-title'] && work['container-title'][0]) {
+                    journal = work['container-title'][0];
+                }
+                // Look up abbreviation (passes through unchanged if not found)
+                if (journal) {
+                    entry.fields.journal = lookupJournalAbbreviation(journal);
+                }
             }
-            // Look up abbreviation (passes through unchanged if not found)
-            if (journal) {
-                entry.fields.journal = lookupJournalAbbreviation(journal);
+            
+            // Publisher (for books, reports, Zenodo/DataCite sources, but not arXiv)
+            if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
+                entry.fields.publisher = work.publisher;
+            }
+            
+            // ISBN for books
+            if (!useDataCite && work.ISBN && work.ISBN[0] && (entryType === 'book' || entryType === 'incollection')) {
+                entry.fields.isbn = work.ISBN[0];
+            }
+            
+            // Edition for books
+            if (!useDataCite && work['edition-number'] && (entryType === 'book' || entryType === 'incollection')) {
+                entry.fields.edition = work['edition-number'];
+            }
+            
+            // arXiv-specific fields
+            if (isArxiv) {
+                if (work.arxivId) {
+                    entry.fields.eprint = work.arxivId;
+                }
+                entry.fields.archiveprefix = 'arXiv';
             }
             
             // Year
@@ -901,21 +1154,23 @@
                 }
             }
             
-            // Volume
-            if (work.volume) {
+            // Volume (CrossRef only, for articles)
+            if (!useDataCite && work.volume && entryType === 'article') {
                 entry.fields.volume = work.volume;
             }
             
-            // Issue/Number
-            if (work.issue) {
+            // Issue/Number (CrossRef only, for articles)
+            if (!useDataCite && work.issue && entryType === 'article') {
                 entry.fields.number = work.issue;
             }
             
-            // Pages
-            if (work.page) {
-                entry.fields.pages = work.page;
-            } else if (work['article-number']) {
-                entry.fields.pages = work['article-number'];
+            // Pages (CrossRef only)
+            if (!useDataCite) {
+                if (work.page) {
+                    entry.fields.pages = work.page;
+                } else if (work['article-number']) {
+                    entry.fields.pages = work['article-number'];
+                }
             }
             
             // DOI
@@ -924,10 +1179,12 @@
             // URL
             if (work.URL) {
                 entry.fields.url = work.URL;
+            } else if (useDataCite) {
+                entry.fields.url = `https://doi.org/${doi}`;
             }
             
-            // ISSN
-            if (work.ISSN && work.ISSN[0]) {
+            // ISSN (CrossRef only, for articles)
+            if (!useDataCite && work.ISSN && work.ISSN[0] && entryType === 'article') {
                 entry.fields.issn = work.ISSN[0];
             }
             
@@ -1203,18 +1460,24 @@
     async function confirmDelete() {
         if (!pendingDeleteCitekey) return;
         
-        showLoading();
+        const citekeyToDelete = pendingDeleteCitekey;
         hideDeleteModal();
+        showLoading();
         
         try {
-            await apiCall('delete', { citekey: pendingDeleteCitekey });
+            await apiCall('delete', { citekey: citekeyToDelete });
             state.editingCitekey = null;
-            await loadEntries();
-            showView('view-list');
         } catch (error) {
+            hideLoading();
             if (error.message !== 'Session locked') {
                 alert('Delete failed: ' + error.message);
             }
+            return;
+        }
+        
+        try {
+            await loadEntries();
+            showView('view-list');
         } finally {
             hideLoading();
         }
@@ -1330,19 +1593,95 @@
         
         elements.btnCleanTitles.addEventListener('click', async () => {
             elements.toolsMenu.classList.remove('show');
-            if (!confirm('This will apply title formatting rules to all entries (wrap acronyms, formulas, etc. in braces for LaTeX). Continue?')) {
+            
+            // Filter to entries that have titles
+            const entriesWithTitles = state.entries.filter(e => e.fields.title);
+            
+            if (entriesWithTitles.length === 0) {
+                alert('No entries with titles found.');
                 return;
             }
+            
+            if (!confirm(`This will apply title formatting rules to ${entriesWithTitles.length} entries (wrap acronyms, formulas, etc. in braces for LaTeX). Continue?`)) {
+                return;
+            }
+            
             showLoading();
+            
+            // Show progress bar
+            const progressContainer = document.getElementById('progress-container');
+            const progressText = document.getElementById('progress-text');
+            const progressFill = document.getElementById('progress-fill');
+            const btnStop = document.getElementById('btn-stop-operation');
+            progressContainer.style.display = 'block';
+            progressFill.style.width = '0%';
+            
+            // Abort flag
+            let aborted = false;
+            const abortHandler = () => { aborted = true; };
+            btnStop.addEventListener('click', abortHandler);
+            
+            const total = entriesWithTitles.length;
+            let cleaned = 0;
+            let processed = 0;
+            
             try {
-                const result = await apiCall('clean_all_titles');
-                await loadEntries();
-                alert(`Cleaned ${result.cleanedCount} of ${result.totalCount} titles.`);
+                for (const entry of entriesWithTitles) {
+                    if (aborted) {
+                        break;
+                    }
+                    
+                    // Update progress
+                    progressText.textContent = `${processed + 1} / ${total}: ${entry.citekey}`;
+                    
+                    // Clean title client-side using htmlToLatex
+                    const originalTitle = entry.fields.title;
+                    const cleanedTitle = htmlToLatex(originalTitle);
+                    
+                    // Only save if title actually changed
+                    if (cleanedTitle !== originalTitle) {
+                        try {
+                            const updatedEntry = {
+                                type: entry.type,
+                                citekey: entry.citekey,
+                                fields: { ...entry.fields, title: cleanedTitle }
+                            };
+                            
+                            await apiCall('save', {
+                                entry: updatedEntry,
+                                originalCitekey: entry.citekey,
+                                cleanTitle: false  // Already cleaned
+                            });
+                            
+                            // Update local state
+                            entry.fields.title = cleanedTitle;
+                            cleaned++;
+                        } catch (error) {
+                            console.error(`Failed to save cleaned title for ${entry.citekey}:`, error);
+                        }
+                    }
+                    
+                    processed++;
+                    progressFill.style.width = `${(processed / total) * 100}%`;
+                }
+                
+                if (aborted) {
+                    alert(`Stopped. Cleaned ${cleaned} of ${processed} titles processed (${total - processed} skipped).`);
+                } else {
+                    alert(`Cleaned ${cleaned} of ${total} titles.`);
+                }
+                
+                // Refresh display
+                applyFiltersAndSort();
+                renderEntries();
+                
             } catch (error) {
                 if (error.message !== 'Session locked') {
                     alert('Failed to clean titles: ' + error.message);
                 }
             } finally {
+                btnStop.removeEventListener('click', abortHandler);
+                progressContainer.style.display = 'none';
                 hideLoading();
             }
         });
@@ -1379,7 +1718,6 @@
             const total = entriesWithDoi.length;
             let updated = 0;
             let failed = 0;
-            let skippedArxiv = 0;
             let corruptDois = [];
             let processed = 0;
             
@@ -1421,21 +1759,13 @@
                         continue;
                     }
                     
-                    // Skip arXiv DOIs
-                    if (doi.startsWith('10.48550/')) {
-                        console.log(`Skipping arXiv DOI for ${entry.citekey}`);
-                        skippedArxiv++;
-                        processed++;
-                        progressFill.style.width = `${(processed / total) * 100}%`;
-                        continue;
-                    }
-                    
                     let work = null;
-                    let isZenodo = doi.startsWith('10.5281/zenodo.');
+                    const useDataCite = shouldUseDataCite(doi);
+                    const isArxiv = doi.startsWith('10.48550/');
                     let ssTitle = null;
                     
-                    if (isZenodo) {
-                        // Use DataCite API for Zenodo DOIs
+                    if (useDataCite) {
+                        // Use DataCite API for Zenodo and arXiv DOIs
                         const response = await fetch(`https://api.datacite.org/dois/${encodeURIComponent(doi)}`);
                         
                         if (!response.ok) {
@@ -1451,15 +1781,20 @@
                         
                         // Convert DataCite format to work-like structure
                         work = {
-                            author: attrs.creators ? attrs.creators.map(c => ({
-                                family: c.familyName || c.name?.split(' ').pop() || '',
-                                given: c.givenName || c.name?.split(' ').slice(0, -1).join(' ') || ''
-                            })) : null,
+                            author: attrs.creators ? attrs.creators.map(parseDataCiteCreator) : null,
                             title: attrs.titles ? [attrs.titles[0]?.title] : null,
                             'container-title': attrs.container ? [attrs.container.title] : null,
                             published: attrs.publicationYear ? { 'date-parts': [[attrs.publicationYear]] } : null,
                             publisher: attrs.publisher
                         };
+                        
+                        // For arXiv, extract the arXiv ID for the eprint field
+                        if (isArxiv && attrs.identifiers) {
+                            const arxivId = attrs.identifiers.find(id => id.identifierType === 'arXiv');
+                            if (arxivId) {
+                                work.arxivId = arxivId.identifier;
+                            }
+                        }
                     } else {
                         // Use CrossRef API and Semantic Scholar in parallel
                         const [crossrefResponse, ssTitleResult] = await Promise.all([
@@ -1502,7 +1837,7 @@
                     }
                     
                     // Journal - prefer abbreviated, with fallback to abbreviation database (only for CrossRef)
-                    if (!isZenodo) {
+                    if (!useDataCite) {
                         let journal = null;
                         if (work['short-container-title'] && work['short-container-title'][0]) {
                             journal = work['short-container-title'][0];
@@ -1529,40 +1864,50 @@
                     }
                     
                     // Volume (CrossRef only)
-                    if (work.volume) {
+                    if (!useDataCite && work.volume) {
                         fields.volume = work.volume;
                     }
                     
                     // Issue/Number (CrossRef only)
-                    if (work.issue) {
+                    if (!useDataCite && work.issue) {
                         fields.number = work.issue;
                     }
                     
                     // Pages (CrossRef only)
-                    if (work.page) {
-                        fields.pages = work.page;
-                    } else if (work['article-number']) {
-                        fields.pages = work['article-number'];
+                    if (!useDataCite) {
+                        if (work.page) {
+                            fields.pages = work.page;
+                        } else if (work['article-number']) {
+                            fields.pages = work['article-number'];
+                        }
                     }
                     
                     // DOI
                     fields.doi = doi;
                     
                     // ISSN (CrossRef only)
-                    if (work.ISSN && work.ISSN[0]) {
+                    if (!useDataCite && work.ISSN && work.ISSN[0]) {
                         fields.issn = work.ISSN[0];
                     }
                     
-                    // Publisher (useful for Zenodo)
-                    if (isZenodo && work.publisher) {
+                    // Publisher (useful for Zenodo, but not arXiv)
+                    if (useDataCite && !isArxiv && work.publisher) {
                         fields.publisher = work.publisher;
+                    }
+                    
+                    // arXiv-specific fields
+                    if (isArxiv) {
+                        if (work.arxivId) {
+                            fields.eprint = work.arxivId;
+                        }
+                        fields.archiveprefix = 'arXiv';
                     }
                     
                     // Save the updated entry
                     await apiCall('save', {
                         entry: {
                             citekey: originalCitekey,
-                            type: entry.type,
+                            type: isArxiv ? 'article' : (useDataCite ? 'misc' : entry.type),
                             fields: fields
                         },
                         originalCitekey: originalCitekey,
@@ -1592,7 +1937,6 @@
             
             let message = `Refreshed ${updated} entries.`;
             if (failed > 0) message += ` Failed: ${failed}.`;
-            if (skippedArxiv > 0) message += `\n\nNote: ${skippedArxiv} arXiv entries were skipped (arXiv DOIs don't have journal metadata).`;
             if (corruptDois.length > 0) {
                 message += `\n\nWarning: ${corruptDois.length} entries have invalid DOIs:\n`;
                 message += corruptDois.slice(0, 10).map(c => `  ${c.citekey}: ${c.doi}`).join('\n');
@@ -1600,6 +1944,490 @@
             }
             if (aborted) message += `\n\nStopped by user (${total - processed} remaining).`;
             alert(message);
+        });
+        
+        // Validate entries
+        elements.btnValidate.addEventListener('click', async () => {
+            elements.toolsMenu.classList.remove('show');
+            
+            // Reload entries first to ensure we have fresh data
+            await loadEntries();
+            
+            const issues = [];
+            const seenDois = new Map(); // doi -> citekey
+            
+            for (const entry of state.entries) {
+                const citekey = entry.citekey;
+                const fields = entry.fields || {};
+                const entryIssues = [];
+                
+                // Check for missing or empty entry type
+                if (!entry.type || entry.type.trim() === '') {
+                    entryIssues.push('Missing entry type (e.g., @article, @book)');
+                }
+                
+                // Check for duplicated author names (like "Name, Name")
+                if (fields.author) {
+                    const authors = fields.author.split(/\s+and\s+/i);
+                    for (const author of authors) {
+                        // Pattern: "Word Word, Word" where first and last words match
+                        const parts = author.split(',').map(p => p.trim());
+                        if (parts.length >= 2) {
+                            const lastNamePart = parts[0].split(/\s+/);
+                            const firstNamePart = parts[1].split(/\s+/);
+                            // Check if any word in last name matches any word in first name (case-insensitive)
+                            for (const lastName of lastNamePart) {
+                                for (const firstName of firstNamePart) {
+                                    if (lastName.toLowerCase() === firstName.toLowerCase() && lastName.length > 2) {
+                                        entryIssues.push(`Duplicated author name: "${author}"`);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Check for year mismatch with citekey
+                // Match year at the END of citekey (last 4 digits, possibly followed by letter suffix)
+                // Skip for arxiv/zenodo entries which use different citekey patterns
+                if (fields.year && !citekey.startsWith('arxiv_') && !citekey.startsWith('zenodo_')) {
+                    const yearMatch = citekey.match(/(\d{4})[a-z]?$/);
+                    if (yearMatch && yearMatch[1] !== fields.year) {
+                        entryIssues.push(`Year mismatch: citekey has ${yearMatch[1]} but year field is ${fields.year}`);
+                    }
+                }
+                
+                // Check for missing required fields
+                if (!fields.author && !fields.editor) {
+                    entryIssues.push('Missing author/editor');
+                }
+                if (!fields.title) {
+                    entryIssues.push('Missing title');
+                }
+                if (!fields.year) {
+                    entryIssues.push('Missing year');
+                }
+                
+                // Check for malformed DOI
+                if (fields.doi) {
+                    const doi = fields.doi.replace(/^https?:\/\/(dx\.)?doi\.org\//, '').trim();
+                    if (!/^10\.\d{4,}\//.test(doi)) {
+                        entryIssues.push(`Malformed DOI: ${fields.doi}`);
+                    }
+                    
+                    // Check for duplicate DOI
+                    const normalizedDoi = doi.toLowerCase();
+                    if (seenDois.has(normalizedDoi)) {
+                        entryIssues.push(`Duplicate DOI (also in ${seenDois.get(normalizedDoi)})`);
+                    } else {
+                        seenDois.set(normalizedDoi, citekey);
+                    }
+                }
+                
+                if (entryIssues.length > 0) {
+                    issues.push({ 
+                        citekey, 
+                        issues: entryIssues, 
+                        hasDoi: !!fields.doi, 
+                        doi: fields.doi,
+                        title: fields.title || '',
+                        author: fields.author || '',
+                        year: fields.year || '',
+                        journal: fields.journal || ''
+                    });
+                }
+            }
+            
+            // Build results HTML
+            let html;
+            if (issues.length === 0) {
+                html = '<p class="success">No issues found in ' + state.entries.length + ' entries.</p>';
+            } else {
+                html = '<p class="warning">Found issues in ' + issues.length + ' of ' + state.entries.length + ' entries:</p>';
+                html += '<div class="validate-issues">';
+                for (const item of issues) {
+                    html += '<div class="validate-entry" data-citekey="' + escapeHtml(item.citekey) + '">';
+                    html += '<div class="validate-entry-header">';
+                    html += '<strong>' + escapeHtml(item.citekey) + '</strong>';
+                    if (item.hasDoi) {
+                        html += ' <button class="btn btn-small btn-fix-doi" data-doi="' + escapeHtml(item.doi) + '">Fix from DOI</button>';
+                    } else if (item.title) {
+                        // No DOI but has title - offer to find DOI
+                        html += ' <button class="btn btn-small btn-find-doi" data-title="' + escapeHtml(item.title) + '" data-author="' + escapeHtml(item.author) + '" data-year="' + escapeHtml(item.year) + '" data-journal="' + escapeHtml(item.journal) + '">Find DOI</button>';
+                    }
+                    html += '</div>';
+                    html += '<ul>';
+                    for (const issue of item.issues) {
+                        html += '<li>' + escapeHtml(issue) + '</li>';
+                    }
+                    html += '</ul>';
+                    html += '<div class="doi-search-results" style="display:none;"></div>';
+                    html += '</div>';
+                }
+                html += '</div>';
+            }
+            
+            elements.validateResults.innerHTML = html;
+            elements.modalValidate.classList.add('active');
+            
+            // Add click handlers for Fix from DOI buttons
+            elements.validateResults.querySelectorAll('.btn-fix-doi').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const doi = e.target.dataset.doi;
+                    const entryDiv = e.target.closest('.validate-entry');
+                    
+                    e.target.disabled = true;
+                    e.target.textContent = 'Fixing...';
+                    
+                    try {
+                        // Clean up DOI
+                        let cleanDoi = doi.replace(/^https?:\/\/(dx\.)?doi\.org\//, '').trim();
+                        cleanDoi = cleanDoi.replace(/[{}]/g, '').replace(/\s+/g, '');
+                        const normalizedDoi = cleanDoi.toLowerCase();
+                        
+                        // Find ALL entries with this DOI (for duplicate handling)
+                        const entriesWithDoi = state.entries.filter(ent => {
+                            const entDoi = (ent.fields.doi || '').toLowerCase()
+                                .replace(/^https?:\/\/(dx\.)?doi\.org\//, '')
+                                .replace(/[{}]/g, '')
+                                .trim();
+                            return entDoi === normalizedDoi;
+                        });
+                        
+                        // Delete all entries with this DOI
+                        for (const ent of entriesWithDoi) {
+                            await apiCall('delete', { citekey: ent.citekey });
+                            const idx = state.entries.findIndex(e => e.citekey === ent.citekey);
+                            if (idx !== -1) {
+                                state.entries.splice(idx, 1);
+                            }
+                        }
+                        
+                        // Fetch fresh metadata from DOI via backend
+                        const lookupResult = await apiCall('lookup_doi', { doi: cleanDoi });
+                        const work = lookupResult.work;
+                        const useDataCite = lookupResult.useDataCite;
+                        const isArxiv = lookupResult.isArxiv;
+                        
+                        // Determine entry type
+                        let entryType;
+                        if (isArxiv) {
+                            entryType = 'article';
+                        } else if (useDataCite) {
+                            entryType = 'misc';
+                        } else {
+                            entryType = detectEntryType(work.type, work);
+                        }
+                        
+                        // Build fresh entry from DOI metadata
+                        const fields = {};
+                        
+                        // Authors - try authors first, fall back to editors
+                        if (work.author && work.author.length > 0) {
+                            fields.author = formatPersonList(work.author);
+                        } else if (work.editor && work.editor.length > 0) {
+                            // No authors, use editors (common for edited books)
+                            fields.editor = formatPersonList(work.editor);
+                        }
+                        
+                        if (work.title) {
+                            fields.title = htmlToLatex(work.title);
+                        }
+                        
+                        // Journal (for articles only)
+                        if (entryType === 'article') {
+                            let journal = work['short-container-title'] || work['container-title'];
+                            if (journal) {
+                                fields.journal = lookupJournalAbbreviation(journal);
+                            }
+                        }
+                        
+                        // Year
+                        if (work.year) {
+                            fields.year = String(work.year);
+                        }
+                        
+                        // Volume, number, pages (for articles)
+                        if (entryType === 'article') {
+                            if (work.volume) fields.volume = work.volume;
+                            if (work.issue) fields.number = work.issue;
+                            if (work.page) {
+                                fields.pages = work.page;
+                            } else if (work['article-number']) {
+                                fields.pages = work['article-number'];
+                            }
+                        }
+                        
+                        // DOI
+                        fields.doi = cleanDoi;
+                        
+                        // arXiv-specific
+                        if (isArxiv) {
+                            if (work.arxivId) fields.eprint = work.arxivId;
+                            fields.archiveprefix = 'arXiv';
+                        }
+                        
+                        // Publisher (for books, reports, DataCite but not arXiv)
+                        if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
+                            fields.publisher = work.publisher;
+                        }
+                        
+                        // ISBN for books
+                        if (work.ISBN && (entryType === 'book' || entryType === 'incollection')) {
+                            fields.isbn = work.ISBN;
+                        }
+                        
+                        // Edition for books
+                        if (work.edition && (entryType === 'book' || entryType === 'incollection')) {
+                            fields.edition = work.edition;
+                        }
+                        
+                        // Generate citekey
+                        const ckResult = await apiCall('generate_citekey', { fields });
+                        const newCitekey = ckResult.citekey;
+                        
+                        // Save the fresh entry
+                        await apiCall('save', {
+                            entry: { type: entryType, citekey: newCitekey, fields: fields },
+                            cleanTitle: true
+                        });
+                        
+                        // Add to local state
+                        state.entries.push({ type: entryType, citekey: newCitekey, fields: fields });
+                        
+                        // Mark as fixed
+                        entryDiv.classList.add('fixed');
+                        const deletedCount = entriesWithDoi.length;
+                        e.target.textContent = deletedCount > 1 
+                            ? `Regenerated as ${newCitekey} (deleted ${deletedCount} duplicates)`
+                            : `Fixed → ${newCitekey}`;
+                        e.target.classList.add('btn-success');
+                        
+                    } catch (error) {
+                        e.target.textContent = 'Failed';
+                        e.target.classList.add('btn-danger');
+                        console.error('Fix from DOI failed:', error);
+                    }
+                });
+            });
+            
+            // Add click handlers for Find DOI buttons
+            elements.validateResults.querySelectorAll('.btn-find-doi').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const title = e.target.dataset.title;
+                    const author = e.target.dataset.author;
+                    const year = e.target.dataset.year;
+                    const journal = e.target.dataset.journal;
+                    const entryDiv = e.target.closest('.validate-entry');
+                    const citekey = entryDiv.dataset.citekey;
+                    const resultsDiv = entryDiv.querySelector('.doi-search-results');
+                    
+                    e.target.disabled = true;
+                    e.target.textContent = 'Searching...';
+                    
+                    try {
+                        // Build search query - use title and first author's last name if available
+                        let query = title;
+                        if (author) {
+                            // Extract first author's last name
+                            const firstAuthor = author.split(' and ')[0];
+                            const lastName = firstAuthor.split(',')[0].trim();
+                            if (lastName) {
+                                query += ' ' + lastName;
+                            }
+                        }
+                        
+                        // Search via backend API (avoids CORS issues)
+                        const data = await apiCall('search_doi', { query });
+                        let items = data.results || [];
+                        
+                        if (items.length === 0) {
+                            e.target.textContent = 'No results';
+                            e.target.classList.add('btn-danger');
+                            return;
+                        }
+                        
+                        // Filter/rank results by year match if we have a year
+                        if (year) {
+                            const yearNum = parseInt(year, 10);
+                            // Sort: exact year match first, then close years, then others
+                            items.sort((a, b) => {
+                                const aYear = parseInt(a.year, 10) || 0;
+                                const bYear = parseInt(b.year, 10) || 0;
+                                const aDiff = Math.abs(aYear - yearNum);
+                                const bDiff = Math.abs(bYear - yearNum);
+                                return aDiff - bDiff;
+                            });
+                            // Filter out items with year mismatch > 2 years (likely wrong results)
+                            const filtered = items.filter(item => {
+                                const itemYear = parseInt(item.year, 10);
+                                return !itemYear || Math.abs(itemYear - yearNum) <= 2;
+                            });
+                            if (filtered.length > 0) {
+                                items = filtered;
+                            }
+                        }
+                        
+                        // Show existing entry metadata for comparison
+                        let resultsHtml = '<div class="doi-results-list">';
+                        resultsHtml += '<div class="existing-entry-info">';
+                        resultsHtml += '<p><strong>Existing entry:</strong></p>';
+                        resultsHtml += `<div class="existing-title">${escapeHtml(title)}</div>`;
+                        resultsHtml += `<div class="existing-meta">${escapeHtml(author)}${year ? ' (' + year + ')' : ''}${journal ? ' — ' + escapeHtml(journal) : ''}</div>`;
+                        resultsHtml += '</div>';
+                        resultsHtml += '<p><strong>Select matching DOI:</strong></p>';
+                        
+                        for (const item of items) {
+                            const yearMatch = year && item.year && item.year.toString() === year;
+                            const matchClass = yearMatch ? ' year-match' : '';
+                            resultsHtml += `<div class="doi-result-item${matchClass}" data-doi="${escapeHtml(item.doi)}">`;
+                            resultsHtml += `<div class="doi-result-title">${escapeHtml(item.title)}</div>`;
+                            resultsHtml += `<div class="doi-result-meta">${escapeHtml(item.authors)}${item.year ? ' (' + item.year + ')' : ''}${item.journal ? ' — ' + escapeHtml(item.journal) : ''}</div>`;
+                            resultsHtml += `<div class="doi-result-doi">${escapeHtml(item.doi)}</div>`;
+                            resultsHtml += '</div>';
+                        }
+                        resultsHtml += '<button class="btn btn-small btn-cancel-search">Cancel</button></div>';
+                        
+                        resultsDiv.innerHTML = resultsHtml;
+                        resultsDiv.style.display = 'block';
+                        e.target.style.display = 'none';
+                        
+                        // Add click handlers for results
+                        resultsDiv.querySelectorAll('.doi-result-item').forEach(item => {
+                            item.addEventListener('click', async () => {
+                                const selectedDoi = item.dataset.doi;
+                                resultsDiv.innerHTML = '<p>Fixing with DOI: ' + escapeHtml(selectedDoi) + '...</p>';
+                                
+                                try {
+                                    // Delete the old entry
+                                    await apiCall('delete', { citekey: citekey });
+                                    const idx = state.entries.findIndex(ent => ent.citekey === citekey);
+                                    if (idx !== -1) {
+                                        state.entries.splice(idx, 1);
+                                    }
+                                    
+                                    // Fetch metadata from selected DOI via backend
+                                    const lookupResult = await apiCall('lookup_doi', { doi: selectedDoi });
+                                    const work = lookupResult.work;
+                                    const useDataCite = lookupResult.useDataCite;
+                                    const isArxiv = lookupResult.isArxiv;
+                                    
+                                    // Determine entry type
+                                    let entryType;
+                                    if (isArxiv) {
+                                        entryType = 'article';
+                                    } else if (useDataCite) {
+                                        entryType = 'misc';
+                                    } else {
+                                        entryType = detectEntryType(work.type, work);
+                                    }
+                                    
+                                    // Build entry from metadata
+                                    const fields = {};
+                                    
+                                    // Authors - try authors first, fall back to editors
+                                    if (work.author && work.author.length > 0) {
+                                        fields.author = formatPersonList(work.author);
+                                    } else if (work.editor && work.editor.length > 0) {
+                                        fields.editor = formatPersonList(work.editor);
+                                    }
+                                    
+                                    if (work.title) {
+                                        fields.title = htmlToLatex(work.title);
+                                    }
+                                    
+                                    // Journal (for articles only)
+                                    if (entryType === 'article') {
+                                        let journal = work['short-container-title'] || work['container-title'];
+                                        if (journal) {
+                                            fields.journal = lookupJournalAbbreviation(journal);
+                                        }
+                                    }
+                                    
+                                    if (work.year) {
+                                        fields.year = String(work.year);
+                                    }
+                                    
+                                    // Volume, number, pages (for articles)
+                                    if (entryType === 'article') {
+                                        if (work.volume) fields.volume = work.volume;
+                                        if (work.issue) fields.number = work.issue;
+                                        if (work.page) {
+                                            fields.pages = work.page;
+                                        } else if (work['article-number']) {
+                                            fields.pages = work['article-number'];
+                                        }
+                                    }
+                                    
+                                    fields.doi = selectedDoi;
+                                    
+                                    if (isArxiv) {
+                                        if (work.arxivId) fields.eprint = work.arxivId;
+                                        fields.archiveprefix = 'arXiv';
+                                    }
+                                    
+                                    // Publisher (for books, reports, DataCite but not arXiv)
+                                    if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
+                                        fields.publisher = work.publisher;
+                                    }
+                                    
+                                    // ISBN for books
+                                    if (work.ISBN && (entryType === 'book' || entryType === 'incollection')) {
+                                        fields.isbn = work.ISBN;
+                                    }
+                                    
+                                    // Edition for books
+                                    if (work.edition && (entryType === 'book' || entryType === 'incollection')) {
+                                        fields.edition = work.edition;
+                                    }
+                                    
+                                    // Generate citekey
+                                    const ckResult = await apiCall('generate_citekey', { fields });
+                                    const newCitekey = ckResult.citekey;
+                                    
+                                    // Save
+                                    await apiCall('save', {
+                                        entry: { type: entryType, citekey: newCitekey, fields: fields },
+                                        cleanTitle: true
+                                    });
+                                    
+                                    state.entries.push({ type: entryType, citekey: newCitekey, fields: fields });
+                                    
+                                    // Mark as fixed
+                                    entryDiv.classList.add('fixed');
+                                    resultsDiv.innerHTML = `<p class="success">Fixed → ${escapeHtml(newCitekey)}</p>`;
+                                    
+                                } catch (err) {
+                                    resultsDiv.innerHTML = `<p class="error">Failed: ${escapeHtml(err.message)}</p>`;
+                                    console.error('Find DOI fix failed:', err);
+                                }
+                            });
+                        });
+                        
+                        // Cancel button
+                        resultsDiv.querySelector('.btn-cancel-search').addEventListener('click', () => {
+                            resultsDiv.style.display = 'none';
+                            e.target.style.display = '';
+                            e.target.disabled = false;
+                            e.target.textContent = 'Find DOI';
+                        });
+                        
+                    } catch (error) {
+                        e.target.textContent = 'Search failed';
+                        e.target.classList.add('btn-danger');
+                        console.error('Find DOI search failed:', error);
+                    }
+                });
+            });
+        });
+        
+        elements.btnValidateClose.addEventListener('click', async () => {
+            elements.modalValidate.classList.remove('active');
+            // Reload entries if any fixes were made
+            if (elements.validateResults.querySelector('.fixed')) {
+                await loadEntries();
+            }
         });
         
         // Search and filter
@@ -1754,6 +2582,29 @@
             if (acquired) {
                 elements.modalLogout.classList.remove('active'); // Also hide logout modal if shown
                 loadEntries();
+                startSessionHeartbeat(); // Start keeping the session alive
+            }
+        });
+        
+        elements.btnLockedForce.addEventListener('click', async () => {
+            // Force unlock - take over the session
+            try {
+                const response = await fetch('api.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'force_unlock', session_id: state.sessionId })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    hideLockedModal();
+                    elements.modalLogout.classList.remove('active');
+                    loadEntries();
+                    startSessionHeartbeat(); // Start keeping the session alive
+                } else {
+                    alert('Failed to force unlock: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Failed to force unlock: ' + error.message);
             }
         });
         
@@ -1775,6 +2626,27 @@
 
     // ==================== Initialize ====================
     
+    // Heartbeat to keep session lock alive (every 2 minutes)
+    let heartbeatStarted = false;
+    function startSessionHeartbeat() {
+        if (heartbeatStarted) return; // Only start once
+        heartbeatStarted = true;
+        setInterval(async () => {
+            // Only send heartbeat if we're not showing the locked modal
+            if (!elements.modalLocked.classList.contains('active')) {
+                try {
+                    await fetch('api.php', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'check_session', session_id: state.sessionId })
+                    });
+                } catch (e) {
+                    // Ignore heartbeat errors silently
+                }
+            }
+        }, 2 * 60 * 1000); // 2 minutes
+    }
+    
     async function init() {
         initEventListeners();
         document.body.dataset.entryType = 'article';
@@ -1785,6 +2657,7 @@
         const acquired = await checkAndAcquireSession();
         if (acquired) {
             loadEntries();
+            startSessionHeartbeat(); // Keep the session alive
         }
     }
 
