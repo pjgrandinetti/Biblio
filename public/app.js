@@ -82,6 +82,7 @@
         entryCleanTitle: document.getElementById('entry-clean-title'),
         btnGenerateCitekey: document.getElementById('btn-generate-citekey'),
         btnRefreshFromDoi: document.getElementById('btn-refresh-from-doi'),
+        btnFindDoi: document.getElementById('btn-find-doi'),
         btnSaveEntry: document.getElementById('btn-save-entry'),
         btnCancelEntry: document.getElementById('btn-cancel-entry'),
         btnDeleteEntry: document.getElementById('btn-delete-entry'),
@@ -997,6 +998,115 @@
             
         } catch (error) {
             setStatus(elements.formStatus, error.message, 'error');
+        } finally {
+            hideLoading();
+        }
+    }
+
+    async function findDoiForEntry() {
+        // Get current form values
+        const title = document.getElementById('entry-title').value.trim();
+        const author = document.getElementById('entry-author').value.trim();
+        const year = document.getElementById('entry-year').value.trim();
+        const journal = document.getElementById('entry-journal').value.trim();
+        const volume = document.getElementById('entry-volume').value.trim();
+        const pages = document.getElementById('entry-pages').value.trim();
+        const doiField = document.getElementById('entry-doi');
+        
+        // Check if we have enough info to search
+        let query = '';
+        if (title) {
+            query = title;
+            if (author) {
+                // Add first author's last name
+                const firstAuthor = author.split(' and ')[0];
+                const lastName = firstAuthor.split(',')[0].trim();
+                if (lastName) {
+                    query += ' ' + lastName;
+                }
+            }
+        } else if (journal && volume && pages) {
+            // No title - use bibliographic info
+            let firstPage = pages;
+            if (pages.includes('-') || pages.includes('–')) {
+                firstPage = pages.split(/[-–]/)[0].trim();
+            }
+            query = `${journal} ${volume} ${firstPage}`;
+            if (year) {
+                query += ` ${year}`;
+            }
+        }
+        
+        if (!query) {
+            setStatus(elements.formStatus, 'Need title or journal+volume+pages to search', 'error');
+            return;
+        }
+        
+        setStatus(elements.formStatus, 'Searching CrossRef...', 'loading');
+        showLoading();
+        
+        try {
+            const data = await apiCall('search_doi', { query });
+            let items = data.results || [];
+            
+            if (items.length === 0) {
+                setStatus(elements.formStatus, 'No DOIs found', 'error');
+                return;
+            }
+            
+            // Filter by year if we have one
+            if (year) {
+                const yearNum = parseInt(year, 10);
+                items.sort((a, b) => {
+                    const aYear = parseInt(a.year, 10) || 0;
+                    const bYear = parseInt(b.year, 10) || 0;
+                    return Math.abs(aYear - yearNum) - Math.abs(bYear - yearNum);
+                });
+                const filtered = items.filter(item => {
+                    const itemYear = parseInt(item.year, 10);
+                    return !itemYear || Math.abs(itemYear - yearNum) <= 2;
+                });
+                if (filtered.length > 0) {
+                    items = filtered;
+                }
+            }
+            
+            // Build options for user to select
+            const options = items.map((item, i) => {
+                const yearMatch = year && item.year && item.year.toString() === year;
+                const volumeMatch = volume && item.volume && item.volume.toString() === volume;
+                const highlight = yearMatch || volumeMatch ? ' ★' : '';
+                return `${i + 1}. ${item.title}\n   ${item.authors} (${item.year || 'n/d'}) ${item.journal || ''}${highlight}\n   DOI: ${item.doi}`;
+            }).join('\n\n');
+            
+            const choice = prompt(
+                `Found ${items.length} result(s). Enter number to select:\n\n${options}\n\nEnter number (1-${items.length}) or Cancel:`,
+                '1'
+            );
+            
+            if (choice === null) {
+                setStatus(elements.formStatus, 'Search cancelled', 'info');
+                return;
+            }
+            
+            const idx = parseInt(choice, 10) - 1;
+            if (isNaN(idx) || idx < 0 || idx >= items.length) {
+                setStatus(elements.formStatus, 'Invalid selection', 'error');
+                return;
+            }
+            
+            const selectedDoi = items[idx].doi;
+            doiField.value = selectedDoi;
+            
+            // Ask if they want to refresh from the DOI
+            if (confirm(`DOI set to: ${selectedDoi}\n\nRefresh all fields from this DOI?`)) {
+                await refreshFromDoi();
+            } else {
+                setStatus(elements.formStatus, `DOI set to ${selectedDoi}`, 'success');
+            }
+            
+        } catch (error) {
+            setStatus(elements.formStatus, 'Search failed: ' + error.message, 'error');
         } finally {
             hideLoading();
         }
@@ -2578,6 +2688,7 @@
         
         elements.btnGenerateCitekey.addEventListener('click', generateCitekey);
         elements.btnRefreshFromDoi.addEventListener('click', refreshFromDoi);
+        elements.btnFindDoi.addEventListener('click', findDoiForEntry);
         elements.btnSaveEntry.addEventListener('click', saveEntry);
         elements.btnCancelEntry.addEventListener('click', () => {
             state.editingCitekey = null;
