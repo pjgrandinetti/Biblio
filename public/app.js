@@ -1121,11 +1121,10 @@
         if (title) {
             currentEntryHtml += `<div class="doi-current-title">${escapeHtml(title)}</div>`;
         }
-        const metaParts = [];
         if (author) {
-            const firstAuthor = author.split(' and ')[0];
-            metaParts.push(escapeHtml(firstAuthor));
+            currentEntryHtml += `<div class="doi-current-authors">${escapeHtml(author)}</div>`;
         }
+        const metaParts = [];
         if (year) metaParts.push(`(${year})`);
         if (journal) metaParts.push(escapeHtml(journal));
         if (volume) metaParts.push(`vol. ${volume}`);

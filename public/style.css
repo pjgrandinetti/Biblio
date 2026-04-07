@@ -782,6 +782,12 @@ body[data-entry-type="unpublished"] .field-unpublished {
     margin-bottom: 0.25rem;
 }
 
+.doi-current-authors {
+    font-size: 0.9em;
+    color: #444;
+    margin-bottom: 0.25rem;
+}
+
 .doi-current-meta {
     font-size: 0.9em;
     color: #666;
