@@ -1123,7 +1123,9 @@ function handleRequest(): void {
                         'title' => ($item['title'][0] ?? 'No title'),
                         'authors' => implode(', ', $authorNames),
                         'year' => $item['published']['date-parts'][0][0] ?? $item['issued']['date-parts'][0][0] ?? '',
-                        'journal' => $item['container-title'][0] ?? ''
+                        'journal' => $item['container-title'][0] ?? '',
+                        'volume' => $item['volume'] ?? '',
+                        'page' => $item['page'] ?? ''
                     ];
                 }
                 

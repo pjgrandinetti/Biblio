@@ -2039,7 +2039,9 @@
                         title: fields.title || '',
                         author: fields.author || '',
                         year: fields.year || '',
-                        journal: fields.journal || ''
+                        journal: fields.journal || '',
+                        volume: fields.volume || '',
+                        pages: fields.pages || ''
                     });
                 }
             }
@@ -2057,9 +2059,9 @@
                     html += '<strong>' + escapeHtml(item.citekey) + '</strong>';
                     if (item.hasDoi) {
                         html += ' <button class="btn btn-small btn-fix-doi" data-doi="' + escapeHtml(item.doi) + '">Fix from DOI</button>';
-                    } else if (item.title) {
-                        // No DOI but has title - offer to find DOI
-                        html += ' <button class="btn btn-small btn-find-doi" data-title="' + escapeHtml(item.title) + '" data-author="' + escapeHtml(item.author) + '" data-year="' + escapeHtml(item.year) + '" data-journal="' + escapeHtml(item.journal) + '">Find DOI</button>';
+                    } else if (item.title || (item.journal && item.volume && item.pages)) {
+                        // No DOI but has title OR bibliographic info (journal/volume/pages) - offer to find DOI
+                        html += ' <button class="btn btn-small btn-find-doi" data-title="' + escapeHtml(item.title) + '" data-author="' + escapeHtml(item.author) + '" data-year="' + escapeHtml(item.year) + '" data-journal="' + escapeHtml(item.journal) + '" data-volume="' + escapeHtml(item.volume) + '" data-pages="' + escapeHtml(item.pages) + '">Find DOI</button>';
                     }
                     html += '</div>';
                     html += '<ul>';
@@ -2224,6 +2226,8 @@
                     const author = e.target.dataset.author;
                     const year = e.target.dataset.year;
                     const journal = e.target.dataset.journal;
+                    const volume = e.target.dataset.volume;
+                    const pages = e.target.dataset.pages;
                     const entryDiv = e.target.closest('.validate-entry');
                     const citekey = entryDiv.dataset.citekey;
                     const resultsDiv = entryDiv.querySelector('.doi-search-results');
@@ -2232,15 +2236,37 @@
                     e.target.textContent = 'Searching...';
                     
                     try {
-                        // Build search query - use title and first author's last name if available
-                        let query = title;
-                        if (author) {
-                            // Extract first author's last name
-                            const firstAuthor = author.split(' and ')[0];
-                            const lastName = firstAuthor.split(',')[0].trim();
-                            if (lastName) {
-                                query += ' ' + lastName;
+                        // Build search query
+                        let query = '';
+                        
+                        if (title) {
+                            // Use title as primary search term
+                            query = title;
+                            if (author) {
+                                // Add first author's last name
+                                const firstAuthor = author.split(' and ')[0];
+                                const lastName = firstAuthor.split(',')[0].trim();
+                                if (lastName) {
+                                    query += ' ' + lastName;
+                                }
                             }
+                        } else if (journal && volume && pages) {
+                            // No title - use bibliographic info
+                            // Extract first page number from pages range
+                            let firstPage = pages;
+                            if (pages.includes('-') || pages.includes('–')) {
+                                firstPage = pages.split(/[-–]/)[0].trim();
+                            }
+                            query = `${journal} ${volume} ${firstPage}`;
+                            if (year) {
+                                query += ` ${year}`;
+                            }
+                        }
+                        
+                        if (!query) {
+                            e.target.textContent = 'No search data';
+                            e.target.classList.add('btn-danger');
+                            return;
                         }
                         
                         // Search via backend API (avoids CORS issues)
@@ -2278,17 +2304,34 @@
                         let resultsHtml = '<div class="doi-results-list">';
                         resultsHtml += '<div class="existing-entry-info">';
                         resultsHtml += '<p><strong>Existing entry:</strong></p>';
-                        resultsHtml += `<div class="existing-title">${escapeHtml(title)}</div>`;
-                        resultsHtml += `<div class="existing-meta">${escapeHtml(author)}${year ? ' (' + year + ')' : ''}${journal ? ' — ' + escapeHtml(journal) : ''}</div>`;
+                        if (title) {
+                            resultsHtml += `<div class="existing-title">${escapeHtml(title)}</div>`;
+                        } else {
+                            resultsHtml += `<div class="existing-title">(No title)</div>`;
+                        }
+                        let metaParts = [];
+                        if (author) metaParts.push(escapeHtml(author));
+                        if (year) metaParts.push('(' + year + ')');
+                        if (journal) metaParts.push(escapeHtml(journal));
+                        if (volume) metaParts.push('vol. ' + escapeHtml(volume));
+                        if (pages) metaParts.push('pp. ' + escapeHtml(pages));
+                        resultsHtml += `<div class="existing-meta">${metaParts.join(' ')}</div>`;
                         resultsHtml += '</div>';
                         resultsHtml += '<p><strong>Select matching DOI:</strong></p>';
                         
                         for (const item of items) {
                             const yearMatch = year && item.year && item.year.toString() === year;
-                            const matchClass = yearMatch ? ' year-match' : '';
+                            const volumeMatch = volume && item.volume && item.volume.toString() === volume;
+                            const pageMatch = pages && item.page && item.page.startsWith(pages.split(/[-–]/)[0]);
+                            const matchClass = (yearMatch || volumeMatch || pageMatch) ? ' year-match' : '';
                             resultsHtml += `<div class="doi-result-item${matchClass}" data-doi="${escapeHtml(item.doi)}">`;
                             resultsHtml += `<div class="doi-result-title">${escapeHtml(item.title)}</div>`;
-                            resultsHtml += `<div class="doi-result-meta">${escapeHtml(item.authors)}${item.year ? ' (' + item.year + ')' : ''}${item.journal ? ' — ' + escapeHtml(item.journal) : ''}</div>`;
+                            let resultMeta = escapeHtml(item.authors);
+                            if (item.year) resultMeta += ' (' + item.year + ')';
+                            if (item.journal) resultMeta += ' — ' + escapeHtml(item.journal);
+                            if (item.volume) resultMeta += ' vol. ' + escapeHtml(item.volume);
+                            if (item.page) resultMeta += ', pp. ' + escapeHtml(item.page);
+                            resultsHtml += `<div class="doi-result-meta">${resultMeta}</div>`;
                             resultsHtml += `<div class="doi-result-doi">${escapeHtml(item.doi)}</div>`;
                             resultsHtml += '</div>';
                         }
