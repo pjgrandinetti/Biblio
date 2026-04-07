@@ -124,6 +124,11 @@
         validateResults: document.getElementById('validate-results'),
         btnValidateClose: document.getElementById('btn-validate-close'),
         
+        // DOI Select modal
+        modalDoiSelect: document.getElementById('modal-doi-select'),
+        doiResultsList: document.getElementById('doi-results-list'),
+        btnDoiCancel: document.getElementById('btn-doi-cancel'),
+        
         // Loading
         loading: document.getElementById('loading')
     };
@@ -1077,45 +1082,74 @@
                 }
             }
             
-            // Build options for user to select
-            const options = items.map((item, i) => {
-                const yearMatch = year && item.year && item.year.toString() === year;
-                const volumeMatch = volume && item.volume && item.volume.toString() === volume;
-                const highlight = yearMatch || volumeMatch ? ' ★' : '';
-                return `${i + 1}. ${item.title}\n   ${item.authors} (${item.year || 'n/d'}) ${item.journal || ''}${highlight}\n   DOI: ${item.doi}`;
-            }).join('\n\n');
-            
-            const choice = prompt(
-                `Found ${items.length} result(s). Enter number to select:\n\n${options}\n\nEnter number (1-${items.length}) or Cancel:`,
-                '1'
-            );
-            
-            if (choice === null) {
-                setStatus(elements.formStatus, 'Search cancelled', 'info');
-                return;
-            }
-            
-            const idx = parseInt(choice, 10) - 1;
-            if (isNaN(idx) || idx < 0 || idx >= items.length) {
-                setStatus(elements.formStatus, 'Invalid selection', 'error');
-                return;
-            }
-            
-            const selectedDoi = items[idx].doi;
-            doiField.value = selectedDoi;
-            doiField.dispatchEvent(new Event('input'));  // Trigger UI updates (hide Find DOI button, etc.)
-            
-            // Ask if they want to refresh from the DOI
-            if (confirm(`DOI set to: ${selectedDoi}\n\nRefresh all fields from this DOI?`)) {
-                await refreshFromDoi();
-            } else {
-                setStatus(elements.formStatus, `DOI set to ${selectedDoi}`, 'success');
-            }
+            // Show DOI selection modal
+            showDoiSelectModal(items, year, volume, doiField);
             
         } catch (error) {
             setStatus(elements.formStatus, 'Search failed: ' + error.message, 'error');
         } finally {
             hideLoading();
+        }
+    }
+
+    function showDoiSelectModal(items, year, volume, doiField) {
+        // Build the results list
+        const html = items.map((item, i) => {
+            const yearMatch = year && item.year && item.year.toString() === year;
+            const volumeMatch = volume && item.volume && item.volume.toString() === volume;
+            const isHighlighted = yearMatch || volumeMatch;
+            
+            // Clean up title (remove HTML tags like <i>)
+            const cleanTitle = (item.title || 'Untitled').replace(/<[^>]*>/g, '');
+            
+            return `
+                <div class="doi-result-card${isHighlighted ? ' highlighted' : ''}" data-index="${i}">
+                    <div class="doi-result-title">
+                        ${escapeHtml(cleanTitle)}
+                        ${isHighlighted ? '<span class="doi-result-badge">Match</span>' : ''}
+                    </div>
+                    <div class="doi-result-meta">
+                        ${escapeHtml(item.authors || 'Unknown authors')} (${item.year || 'n/d'})
+                        ${item.journal ? ' — ' + escapeHtml(item.journal) : ''}
+                    </div>
+                    <div class="doi-result-doi">${escapeHtml(item.doi)}</div>
+                </div>
+            `;
+        }).join('');
+        
+        elements.doiResultsList.innerHTML = html;
+        elements.modalDoiSelect.classList.add('active');
+        clearStatus(elements.formStatus);
+        
+        // Store items for selection handler
+        elements.doiResultsList.dataset.items = JSON.stringify(items);
+        elements.doiResultsList.dataset.doiFieldId = doiField.id;
+        
+        // Add click handlers to cards
+        elements.doiResultsList.querySelectorAll('.doi-result-card').forEach(card => {
+            card.addEventListener('click', handleDoiResultClick);
+        });
+    }
+
+    async function handleDoiResultClick(e) {
+        const card = e.currentTarget;
+        const index = parseInt(card.dataset.index, 10);
+        const items = JSON.parse(elements.doiResultsList.dataset.items);
+        const doiFieldId = elements.doiResultsList.dataset.doiFieldId;
+        const doiField = document.getElementById(doiFieldId);
+        
+        const selectedDoi = items[index].doi;
+        doiField.value = selectedDoi;
+        doiField.dispatchEvent(new Event('input'));
+        
+        // Close modal
+        elements.modalDoiSelect.classList.remove('active');
+        
+        // Ask if they want to refresh from the DOI
+        if (confirm(`DOI set to: ${selectedDoi}\n\nRefresh all fields from this DOI?`)) {
+            await refreshFromDoi();
+        } else {
+            setStatus(elements.formStatus, `DOI set to ${selectedDoi}`, 'success');
         }
     }
 
@@ -2593,6 +2627,11 @@
             if (elements.validateResults.querySelector('.fixed')) {
                 await loadEntries();
             }
+        });
+        
+        elements.btnDoiCancel.addEventListener('click', () => {
+            elements.modalDoiSelect.classList.remove('active');
+            setStatus(elements.formStatus, 'Search cancelled', 'info');
         });
         
         // Search and filter

@@ -750,6 +750,78 @@ body[data-entry-type="unpublished"] .field-unpublished {
     background: rgba(39, 174, 96, 0.1);
 }
 
+/* DOI Selection Modal */
+.modal-doi-select {
+    max-width: 600px;
+    max-height: 80vh;
+}
+
+.modal-doi-select h3 {
+    margin-bottom: 1rem;
+}
+
+#doi-results-list {
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.doi-result-card {
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    background: white;
+}
+
+.doi-result-card:hover {
+    border-color: var(--primary-color);
+    background: rgba(52, 152, 219, 0.05);
+}
+
+.doi-result-card:active {
+    transform: scale(0.99);
+}
+
+.doi-result-card.highlighted {
+    border-color: #27ae60;
+    background: rgba(39, 174, 96, 0.05);
+}
+
+.doi-result-card.highlighted:hover {
+    background: rgba(39, 174, 96, 0.1);
+}
+
+.doi-result-title {
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+    color: var(--text-color);
+}
+
+.doi-result-meta {
+    font-size: 0.9em;
+    color: #666;
+    margin-bottom: 0.25rem;
+}
+
+.doi-result-doi {
+    font-size: 0.85em;
+    color: var(--primary-color);
+    font-family: monospace;
+}
+
+.doi-result-badge {
+    display: inline-block;
+    background: #27ae60;
+    color: white;
+    font-size: 0.75em;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    margin-left: 0.5rem;
+    vertical-align: middle;
+}
+
 .validate-entry-header {
     display: flex;
     align-items: center;
