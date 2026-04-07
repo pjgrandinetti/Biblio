@@ -141,6 +141,7 @@
         'entry-journal': 'journal',
         'entry-booktitle': 'booktitle',
         'entry-publisher': 'publisher',
+        'entry-isbn': 'isbn',
         'entry-school': 'school',
         'entry-year': 'year',
         'entry-volume': 'volume',
