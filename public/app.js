@@ -1672,7 +1672,7 @@
                 }
                 
                 // Refresh display
-                applyFiltersAndSort();
+                filterAndSortEntries();
                 renderEntries();
                 
             } catch (error) {
