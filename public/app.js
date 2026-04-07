@@ -793,7 +793,10 @@
         });
         
         try {
-            const result = await apiCall('generate_citekey', { fields });
+            const result = await apiCall('generate_citekey', { 
+                fields,
+                editingCitekey: state.editingCitekey  // Exclude current entry from uniqueness check
+            });
             elements.entryCitekey.value = result.citekey;
         } catch (error) {
             console.error('Failed to generate citekey:', error);

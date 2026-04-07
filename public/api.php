@@ -314,7 +314,7 @@ class BibTeXParser {
  * Generate citation key from entry fields
  * Format: journalabbr_volume_page_year
  */
-function generateCitekey(array $fields): string {
+function generateCitekey(array $fields, ?string $editingCitekey = null): string {
     // Check for arXiv entry - use arxiv_{id}_{year}
     // Detect by DOI, archiveprefix, or eprint containing arXiv ID pattern
     $archiveprefix = $fields['archiveprefix'] ?? '';
@@ -350,6 +350,7 @@ function generateCitekey(array $fields): string {
     $volume = $fields['volume'] ?? '';
     $pages = $fields['pages'] ?? ($fields['article-number'] ?? '');
     $year = $fields['year'] ?? '';
+    $title = $fields['title'] ?? '';
     
     // Extract first page if range given
     if (strpos($pages, '-') !== false || strpos($pages, '--') !== false) {
@@ -357,44 +358,139 @@ function generateCitekey(array $fields): string {
     }
     $pages = trim($pages);
     
+    // Words to ignore in abbreviations
+    $ignoreWords = ['the', 'of', 'and', 'for', 'in', 'on', 'a', 'an', 'to', 'with'];
+    
     // Generate journal abbreviation: first letter of each word, ignoring articles
-    $ignoreWords = ['the', 'of', 'and', 'for', 'in', 'on', 'a', 'an'];
     $words = preg_split('/\s+/', $journal);
-    $abbr = '';
+    $journalAbbr = '';
     foreach ($words as $word) {
         $word = strtolower(trim($word, '.,;:'));
         if ($word !== '' && !in_array($word, $ignoreWords)) {
-            $abbr .= $word[0];
+            $journalAbbr .= $word[0];
         }
     }
-    $abbr = strtolower($abbr);
+    $journalAbbr = strtolower($journalAbbr);
     
-    // Build citekey
+    // Build citekey for journal articles
     $parts = [];
-    if ($abbr) $parts[] = $abbr;
+    if ($journalAbbr) $parts[] = $journalAbbr;
     if ($volume) $parts[] = $volume;
     if ($pages) $parts[] = $pages;
     if ($year) $parts[] = $year;
     
-    if (empty($parts)) {
-        // Fallback: use author (or editor if no author) + year
-        $author = $fields['author'] ?? '';
-        if (empty($author)) {
-            $author = $fields['editor'] ?? 'unknown';
-        }
-        $firstAuthor = preg_split('/\s+and\s+/i', $author)[0];
-        // Get last name
-        if (strpos($firstAuthor, ',') !== false) {
-            $lastName = trim(explode(',', $firstAuthor)[0]);
-        } else {
-            $nameParts = preg_split('/\s+/', trim($firstAuthor));
-            $lastName = end($nameParts);
-        }
-        $lastName = preg_replace('/[^a-zA-Z]/', '', $lastName);
-        return strtolower($lastName) . ($year ?: date('Y'));
+    // If we have journal info, use journal-based citekey
+    if (!empty($parts) && $journalAbbr) {
+        return implode('_', $parts);
     }
     
-    return implode('_', $parts);
+    // For books/non-journal entries: use first letter of each title word
+    if ($title) {
+        // Clean title: remove braces and special chars
+        $cleanTitle = preg_replace('/[{}]/', '', $title);
+        $titleWords = preg_split('/\s+/', $cleanTitle);
+        $titleAbbr = '';
+        foreach ($titleWords as $word) {
+            $word = strtolower(trim($word, '.,;:()[]'));
+            if ($word !== '' && !in_array($word, $ignoreWords)) {
+                // Get first letter (handle unicode)
+                $firstChar = mb_substr($word, 0, 1);
+                if (preg_match('/[a-z]/i', $firstChar)) {
+                    $titleAbbr .= strtolower($firstChar);
+                }
+            }
+        }
+        
+        if ($titleAbbr) {
+            $citekey = $titleAbbr;
+            
+            // Check uniqueness, add author if needed
+            $existingKeys = getExistingCitekeys($editingCitekey);
+            
+            if (!isset($existingKeys[$citekey])) {
+                return $citekey;
+            }
+            
+            // Not unique - try adding first author last name
+            $author = $fields['author'] ?? '';
+            if (empty($author)) {
+                $author = $fields['editor'] ?? '';
+            }
+            
+            if ($author) {
+                $firstAuthor = preg_split('/\s+and\s+/i', $author)[0];
+                if (strpos($firstAuthor, ',') !== false) {
+                    $lastName = trim(explode(',', $firstAuthor)[0]);
+                } else {
+                    $nameParts = preg_split('/\s+/', trim($firstAuthor));
+                    $lastName = end($nameParts);
+                }
+                $lastName = preg_replace('/[^a-zA-Z]/', '', $lastName);
+                $lastName = strtolower($lastName);
+                
+                if ($lastName) {
+                    $citekeyWithAuthor = $titleAbbr . '_' . $lastName;
+                    if (!isset($existingKeys[$citekeyWithAuthor])) {
+                        return $citekeyWithAuthor;
+                    }
+                    // Still not unique - add letter suffix
+                    return addLetterSuffix($citekeyWithAuthor, $existingKeys);
+                }
+            }
+            
+            // No author available - add letter suffix to title abbr
+            return addLetterSuffix($citekey, $existingKeys);
+        }
+    }
+    
+    // Ultimate fallback: author + year
+    $author = $fields['author'] ?? '';
+    if (empty($author)) {
+        $author = $fields['editor'] ?? 'unknown';
+    }
+    $firstAuthor = preg_split('/\s+and\s+/i', $author)[0];
+    if (strpos($firstAuthor, ',') !== false) {
+        $lastName = trim(explode(',', $firstAuthor)[0]);
+    } else {
+        $nameParts = preg_split('/\s+/', trim($firstAuthor));
+        $lastName = end($nameParts);
+    }
+    $lastName = preg_replace('/[^a-zA-Z]/', '', $lastName);
+    $lastName = strtolower($lastName) ?: 'unknown';
+    
+    $citekey = $lastName . ($year ?: date('Y'));
+    $existingKeys = getExistingCitekeys($editingCitekey);
+    return addLetterSuffix($citekey, $existingKeys);
+}
+
+/**
+ * Get existing citekeys, excluding the one being edited
+ */
+function getExistingCitekeys(?string $editingCitekey = null): array {
+    $entries = readBibFile();
+    $existingKeys = [];
+    foreach ($entries as $entry) {
+        if ($editingCitekey !== null && $entry['citekey'] === $editingCitekey) {
+            continue;
+        }
+        $existingKeys[$entry['citekey']] = true;
+    }
+    return $existingKeys;
+}
+
+/**
+ * Add letter suffix if citekey already exists
+ */
+function addLetterSuffix(string $citekey, array $existingKeys): string {
+    if (!isset($existingKeys[$citekey])) {
+        return $citekey;
+    }
+    
+    $suffix = 'a';
+    while (isset($existingKeys[$citekey . $suffix])) {
+        $suffix++;
+    }
+    return $citekey . $suffix;
 }
 
 /**
@@ -1024,7 +1120,8 @@ function handleRequest(): void {
                 
             case 'generate_citekey':
                 $fields = $input['fields'] ?? [];
-                $citekey = generateCitekey($fields);
+                $editingCitekey = $input['editingCitekey'] ?? null;
+                $citekey = generateCitekey($fields, $editingCitekey);
                 jsonResponse(['citekey' => $citekey]);
                 break;
                 
