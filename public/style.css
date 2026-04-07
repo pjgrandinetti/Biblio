@@ -760,8 +760,35 @@ body[data-entry-type="unpublished"] .field-unpublished {
     margin-bottom: 1rem;
 }
 
+.doi-current-entry {
+    background: #f8f9fa;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+}
+
+.doi-current-label {
+    font-size: 0.8em;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.25rem;
+}
+
+.doi-current-title {
+    font-weight: 500;
+    color: var(--text-color);
+    margin-bottom: 0.25rem;
+}
+
+.doi-current-meta {
+    font-size: 0.9em;
+    color: #666;
+}
+
 #doi-results-list {
-    max-height: 60vh;
+    max-height: 50vh;
     overflow-y: auto;
 }
 

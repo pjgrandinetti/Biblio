@@ -126,8 +126,9 @@
         
         // DOI Select modal
         modalDoiSelect: document.getElementById('modal-doi-select'),
+        doiCurrentEntry: document.getElementById('doi-current-entry'),
         doiResultsList: document.getElementById('doi-results-list'),
-        btnDoiCancel: document.getElementById('btn-doi-cancel'),
+        btnDoiSelectCancel: document.getElementById('btn-doi-select-cancel'),
         
         // Loading
         loading: document.getElementById('loading')
@@ -1082,8 +1083,9 @@
                 }
             }
             
-            // Show DOI selection modal
-            showDoiSelectModal(items, year, volume, doiField);
+            // Show DOI selection modal with entry metadata for comparison
+            const entryMeta = { title, author, year, journal, volume, pages };
+            showDoiSelectModal(items, entryMeta, doiField);
             
         } catch (error) {
             setStatus(elements.formStatus, 'Search failed: ' + error.message, 'error');
@@ -1092,7 +1094,28 @@
         }
     }
 
-    function showDoiSelectModal(items, year, volume, doiField) {
+    function showDoiSelectModal(items, entryMeta, doiField) {
+        const { title, author, year, journal, volume, pages } = entryMeta;
+        
+        // Build current entry info for comparison
+        let currentEntryHtml = '<div class="doi-current-label">Looking for:</div>';
+        if (title) {
+            currentEntryHtml += `<div class="doi-current-title">${escapeHtml(title)}</div>`;
+        }
+        const metaParts = [];
+        if (author) {
+            const firstAuthor = author.split(' and ')[0];
+            metaParts.push(escapeHtml(firstAuthor));
+        }
+        if (year) metaParts.push(`(${year})`);
+        if (journal) metaParts.push(escapeHtml(journal));
+        if (volume) metaParts.push(`vol. ${volume}`);
+        if (pages) metaParts.push(`p. ${pages}`);
+        if (metaParts.length > 0) {
+            currentEntryHtml += `<div class="doi-current-meta">${metaParts.join(' ')}</div>`;
+        }
+        elements.doiCurrentEntry.innerHTML = currentEntryHtml;
+        
         // Build the results list
         const html = items.map((item, i) => {
             const yearMatch = year && item.year && item.year.toString() === year;
@@ -2629,9 +2652,17 @@
             }
         });
         
-        elements.btnDoiCancel.addEventListener('click', () => {
+        elements.btnDoiSelectCancel.addEventListener('click', () => {
             elements.modalDoiSelect.classList.remove('active');
             setStatus(elements.formStatus, 'Search cancelled', 'info');
+        });
+        
+        // Close DOI select modal when clicking overlay
+        elements.modalDoiSelect.addEventListener('click', (e) => {
+            if (e.target === elements.modalDoiSelect) {
+                elements.modalDoiSelect.classList.remove('active');
+                setStatus(elements.formStatus, 'Search cancelled', 'info');
+            }
         });
         
         // Search and filter
