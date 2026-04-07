@@ -832,8 +832,14 @@ body[data-entry-type="unpublished"] .field-unpublished {
     color: var(--text-color);
 }
 
-.doi-result-meta {
+.doi-result-authors {
     font-size: 0.9em;
+    color: #444;
+    margin-bottom: 0.25rem;
+}
+
+.doi-result-meta {
+    font-size: 0.85em;
     color: #666;
     margin-bottom: 0.25rem;
 }

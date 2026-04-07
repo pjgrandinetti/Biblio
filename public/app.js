@@ -1143,16 +1143,21 @@
             // Clean up title (remove HTML tags like <i>)
             const cleanTitle = (item.title || 'Untitled').replace(/<[^>]*>/g, '');
             
+            // Build bibliographic details line
+            const bibParts = [];
+            if (item.year) bibParts.push(`(${item.year})`);
+            if (item.journal) bibParts.push(escapeHtml(item.journal));
+            if (item.volume) bibParts.push(`vol. ${item.volume}`);
+            if (item.page) bibParts.push(`p. ${item.page}`);
+            
             return `
                 <div class="doi-result-card${isHighlighted ? ' highlighted' : ''}" data-index="${i}">
                     <div class="doi-result-title">
                         ${escapeHtml(cleanTitle)}
                         ${isHighlighted ? '<span class="doi-result-badge">Match</span>' : ''}
                     </div>
-                    <div class="doi-result-meta">
-                        ${escapeHtml(item.authors || 'Unknown authors')} (${item.year || 'n/d'})
-                        ${item.journal ? ' — ' + escapeHtml(item.journal) : ''}
-                    </div>
+                    <div class="doi-result-authors">${escapeHtml(item.authors || 'Unknown authors')}</div>
+                    <div class="doi-result-meta">${bibParts.join(' ')}</div>
                     <div class="doi-result-doi">${escapeHtml(item.doi)}</div>
                 </div>
             `;
