@@ -82,6 +82,7 @@
         entryCleanTitle: document.getElementById('entry-clean-title'),
         btnGenerateCitekey: document.getElementById('btn-generate-citekey'),
         btnRefreshFromDoi: document.getElementById('btn-refresh-from-doi'),
+        btnRefreshFromIsbn: document.getElementById('btn-refresh-from-isbn'),
         btnFindDoi: document.getElementById('btn-find-doi'),
         btnSaveEntry: document.getElementById('btn-save-entry'),
         btnCancelEntry: document.getElementById('btn-cancel-entry'),
@@ -1008,6 +1009,85 @@
             urlField.placeholder = 'Disabled when DOI is present';
             
             setStatus(elements.formStatus, 'Fields updated from DOI', 'success');
+            
+        } catch (error) {
+            setStatus(elements.formStatus, error.message, 'error');
+        } finally {
+            hideLoading();
+        }
+    }
+
+    async function refreshFromIsbn() {
+        const isbnField = document.getElementById('entry-isbn');
+        let isbn = isbnField.value.trim();
+        
+        if (!isbn) {
+            setStatus(elements.formStatus, 'Please enter an ISBN first', 'error');
+            return;
+        }
+        
+        setStatus(elements.formStatus, 'Fetching metadata from ISBN...', 'loading');
+        showLoading();
+        
+        try {
+            const data = await apiCall('lookup_isbn', { isbn });
+            const work = data.work;
+            
+            // Keep current citekey
+            const currentCitekey = elements.entryCitekey.value;
+            
+            // Set entry type to book if not already a book-like type
+            const currentType = elements.entryType.value;
+            if (!['book', 'incollection', 'inproceedings'].includes(currentType)) {
+                elements.entryType.value = 'book';
+                document.body.dataset.entryType = 'book';
+            }
+            
+            // Build fields object
+            const fields = {};
+            
+            // Title
+            if (work.title) {
+                fields.title = work.title;
+            }
+            
+            // Authors - convert array to BibTeX format
+            if (work.author && work.author.length > 0) {
+                fields.author = work.author.join(' and ');
+            }
+            
+            // Year
+            if (work.year) {
+                fields.year = work.year;
+            }
+            
+            // Publisher
+            if (work.publisher) {
+                fields.publisher = work.publisher;
+            }
+            
+            // ISBN
+            if (work.isbn) {
+                fields.isbn = work.isbn;
+            }
+            
+            // Populate form fields
+            Object.entries(formFields).forEach(([elementId, fieldName]) => {
+                const el = document.getElementById(elementId);
+                if (el && fields[fieldName]) {
+                    el.value = fields[fieldName];
+                }
+            });
+            
+            // Restore citekey (or generate new one if empty)
+            if (currentCitekey) {
+                elements.entryCitekey.value = currentCitekey;
+            } else {
+                const ckResult = await apiCall('generate_citekey', { fields });
+                elements.entryCitekey.value = ckResult.citekey;
+            }
+            
+            setStatus(elements.formStatus, 'Fields updated from ISBN', 'success');
             
         } catch (error) {
             setStatus(elements.formStatus, error.message, 'error');
@@ -2808,6 +2888,7 @@
         
         elements.btnGenerateCitekey.addEventListener('click', generateCitekey);
         elements.btnRefreshFromDoi.addEventListener('click', refreshFromDoi);
+        elements.btnRefreshFromIsbn.addEventListener('click', refreshFromIsbn);
         elements.btnFindDoi.addEventListener('click', findDoiForEntry);
         elements.btnSaveEntry.addEventListener('click', saveEntry);
         elements.btnCancelEntry.addEventListener('click', () => {

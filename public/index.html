@@ -171,7 +171,10 @@
 
                 <div class="form-row field-book field-incollection field-inproceedings">
                     <label for="entry-isbn">ISBN:</label>
-                    <input type="text" id="entry-isbn" placeholder="978-3-16-148410-0">
+                    <div class="input-with-button">
+                        <input type="text" id="entry-isbn" placeholder="978-3-16-148410-0">
+                        <button id="btn-refresh-from-isbn" class="btn btn-small btn-secondary" title="Fetch metadata from ISBN and repopulate fields">Refresh from ISBN</button>
+                    </div>
                 </div>
 
                 <!-- Thesis fields -->

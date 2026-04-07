@@ -1340,6 +1340,82 @@ function handleRequest(): void {
                     'isArxiv' => $isArxiv
                 ]);
                 break;
+            
+            case 'lookup_isbn':
+                $isbn = $input['isbn'] ?? '';
+                if (!$isbn) {
+                    errorResponse('ISBN required');
+                }
+                
+                // Clean ISBN: remove hyphens, spaces, and any non-alphanumeric chars
+                $isbn = preg_replace('/[^0-9Xx]/', '', $isbn);
+                
+                // Query Open Library API
+                $url = "https://openlibrary.org/api/books?bibkeys=ISBN:{$isbn}&format=json&jscmd=data";
+                
+                $context = stream_context_create([
+                    'http' => [
+                        'method' => 'GET',
+                        'header' => "Accept: application/json\r\nUser-Agent: BibTeXManager/1.0\r\n",
+                        'timeout' => 15
+                    ]
+                ]);
+                
+                $response = @file_get_contents($url, false, $context);
+                if ($response === false) {
+                    errorResponse('Open Library lookup failed');
+                }
+                
+                $data = json_decode($response, true);
+                $key = "ISBN:{$isbn}";
+                
+                if (!$data || !isset($data[$key])) {
+                    errorResponse('ISBN not found in Open Library');
+                }
+                
+                $book = $data[$key];
+                
+                // Extract authors
+                $authors = [];
+                if (isset($book['authors'])) {
+                    foreach ($book['authors'] as $a) {
+                        $authors[] = $a['name'] ?? '';
+                    }
+                }
+                
+                // Extract year from publish_date (can be "2020", "January 2020", etc.)
+                $year = null;
+                if (isset($book['publish_date'])) {
+                    if (preg_match('/\b(19|20)\d{2}\b/', $book['publish_date'], $matches)) {
+                        $year = $matches[0];
+                    }
+                }
+                
+                // Get ISBN-13 if available, else ISBN-10
+                $isbn13 = $book['identifiers']['isbn_13'][0] ?? null;
+                $isbn10 = $book['identifiers']['isbn_10'][0] ?? null;
+                $cleanIsbn = $isbn13 ?? $isbn10 ?? $isbn;
+                
+                // Format ISBN with hyphens (basic formatting for ISBN-13)
+                if (strlen($cleanIsbn) === 13) {
+                    $cleanIsbn = substr($cleanIsbn, 0, 3) . '-' . 
+                                 substr($cleanIsbn, 3, 1) . '-' . 
+                                 substr($cleanIsbn, 4, 3) . '-' . 
+                                 substr($cleanIsbn, 7, 5) . '-' . 
+                                 substr($cleanIsbn, 12, 1);
+                }
+                
+                $work = [
+                    'title' => $book['title'] ?? null,
+                    'author' => $authors,
+                    'year' => $year,
+                    'publisher' => isset($book['publishers'][0]) ? $book['publishers'][0]['name'] : null,
+                    'isbn' => $cleanIsbn,
+                    'pages' => $book['number_of_pages'] ?? null
+                ];
+                
+                jsonResponse(['work' => $work, 'isbn' => $cleanIsbn]);
+                break;
                 
             default:
                 errorResponse('Unknown action');
