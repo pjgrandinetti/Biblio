@@ -1212,7 +1212,16 @@ function handleRequest(): void {
                     $authorNames = [];
                     if (isset($item['author'])) {
                         foreach ($item['author'] as $a) {
-                            $authorNames[] = $a['family'] ?? $a['name'] ?? '';
+                            $family = $a['family'] ?? '';
+                            $given = $a['given'] ?? '';
+                            if ($family && $given) {
+                                // Format as "Given Family" for readability
+                                $authorNames[] = $given . ' ' . $family;
+                            } elseif ($family) {
+                                $authorNames[] = $family;
+                            } elseif (isset($a['name'])) {
+                                $authorNames[] = $a['name'];
+                            }
                         }
                     }
                     $results[] = [
