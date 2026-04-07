@@ -1634,6 +1634,11 @@
                     // Update progress
                     progressText.textContent = `${processed + 1} / ${total}: ${entry.citekey}`;
                     
+                    // Yield to browser periodically to update UI and allow Stop button to work
+                    if (processed % 50 === 0) {
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                    
                     // Clean title client-side using htmlToLatex
                     const originalTitle = entry.fields.title;
                     const cleanedTitle = htmlToLatex(originalTitle);
