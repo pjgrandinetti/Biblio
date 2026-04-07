@@ -1025,25 +1025,44 @@
         const pages = document.getElementById('entry-pages').value.trim();
         const doiField = document.getElementById('entry-doi');
         
+        // Extract author last names for search
+        function getAuthorLastNames(authorStr) {
+            if (!authorStr) return [];
+            return authorStr.split(' and ').map(a => {
+                const parts = a.split(',');
+                return parts[0].trim().replace(/[{}]/g, '');
+            }).filter(n => n);
+        }
+        
         // Check if we have enough info to search
         let query = '';
         if (title) {
             query = title;
             if (author) {
                 // Add first author's last name
-                const firstAuthor = author.split(' and ')[0];
-                const lastName = firstAuthor.split(',')[0].trim();
-                if (lastName) {
-                    query += ' ' + lastName;
+                const lastNames = getAuthorLastNames(author);
+                if (lastNames.length > 0) {
+                    query += ' ' + lastNames[0];
                 }
             }
         } else if (journal && volume && pages) {
-            // No title - use bibliographic info
+            // No title - use bibliographic info with authors
             let firstPage = pages;
             if (pages.includes('-') || pages.includes('–')) {
                 firstPage = pages.split(/[-–]/)[0].trim();
             }
             query = `${journal} ${volume} ${firstPage}`;
+            
+            // Add author names - crucial for disambiguating
+            const lastNames = getAuthorLastNames(author);
+            if (lastNames.length > 0) {
+                // Add first and last author for better matching
+                query += ' ' + lastNames[0];
+                if (lastNames.length > 1) {
+                    query += ' ' + lastNames[lastNames.length - 1];
+                }
+            }
+            
             if (year) {
                 query += ` ${year}`;
             }
@@ -2413,15 +2432,23 @@
                         // Build search query
                         let query = '';
                         
+                        // Extract author last names for search
+                        function getAuthorLastNames(authorStr) {
+                            if (!authorStr) return [];
+                            return authorStr.split(' and ').map(a => {
+                                const parts = a.split(',');
+                                return parts[0].trim().replace(/[{}]/g, '');
+                            }).filter(n => n);
+                        }
+                        
                         if (title) {
                             // Use title as primary search term
                             query = title;
                             if (author) {
                                 // Add first author's last name
-                                const firstAuthor = author.split(' and ')[0];
-                                const lastName = firstAuthor.split(',')[0].trim();
-                                if (lastName) {
-                                    query += ' ' + lastName;
+                                const lastNames = getAuthorLastNames(author);
+                                if (lastNames.length > 0) {
+                                    query += ' ' + lastNames[0];
                                 }
                             }
                         } else if (journal && volume && pages) {
@@ -2432,6 +2459,16 @@
                                 firstPage = pages.split(/[-–]/)[0].trim();
                             }
                             query = `${journal} ${volume} ${firstPage}`;
+                            
+                            // Add author names - crucial for disambiguating
+                            const lastNames = getAuthorLastNames(author);
+                            if (lastNames.length > 0) {
+                                query += ' ' + lastNames[0];
+                                if (lastNames.length > 1) {
+                                    query += ' ' + lastNames[lastNames.length - 1];
+                                }
+                            }
+                            
                             if (year) {
                                 query += ` ${year}`;
                             }
