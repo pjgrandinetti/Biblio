@@ -716,6 +716,9 @@
             urlField.value = '';
         }
         
+        // Hide Find DOI button if DOI already exists
+        elements.btnFindDoi.style.display = hasDoi ? 'none' : 'inline-flex';
+        
         clearStatus(elements.formStatus);
         showView('view-form');
     }
@@ -1097,6 +1100,7 @@
             
             const selectedDoi = items[idx].doi;
             doiField.value = selectedDoi;
+            doiField.dispatchEvent(new Event('input'));  // Trigger UI updates (hide Find DOI button, etc.)
             
             // Ask if they want to refresh from the DOI
             if (confirm(`DOI set to: ${selectedDoi}\n\nRefresh all fields from this DOI?`)) {
@@ -2672,12 +2676,13 @@
             document.body.dataset.entryType = elements.entryType.value;
         });
         
-        // Disable URL field when DOI is present
+        // Disable URL field and hide Find DOI button when DOI is present
         const doiField = document.getElementById('entry-doi');
         const urlField = document.getElementById('entry-url');
         doiField.addEventListener('input', () => {
             const hasDoi = doiField.value.trim() !== '';
             urlField.disabled = hasDoi;
+            elements.btnFindDoi.style.display = hasDoi ? 'none' : 'inline-flex';
             if (hasDoi) {
                 urlField.value = '';
                 urlField.placeholder = 'Disabled when DOI is present';
