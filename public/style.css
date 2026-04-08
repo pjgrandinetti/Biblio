@@ -376,6 +376,17 @@ td.cell-type {
     font-size: 0.875rem;
 }
 
+.page-size-select {
+    margin-left: 1rem;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    background: var(--card-bg);
+    color: var(--text-color);
+    font-size: 0.875rem;
+    cursor: pointer;
+}
+
 /* Lookup forms */
 .lookup-form,
 .import-form,

@@ -361,6 +361,7 @@ function generateCitekeyForEntry(array $entry): string {
     }
     
     $journal = $fields['journal'] ?? '';
+    $booktitle = $fields['booktitle'] ?? '';
     $volume = $fields['volume'] ?? '';
     $pages = $fields['pages'] ?? '';
     
@@ -382,16 +383,33 @@ function generateCitekeyForEntry(array $entry): string {
     
     $ignoreWords = ['the', 'of', 'and', 'for', 'in', 'on', 'a', 'an', 'to', 'with'];
     
-    // Generate journal abbreviation
-    $words = preg_split('/\s+/', $journal);
+    // Use journal or booktitle (for conference proceedings)
+    $sourceTitle = $journal ?: $booktitle;
+    
+    // Generate abbreviation: first letter of each word, ignoring articles and numeric words
+    // Acronyms (all-uppercase words like NMR, MRI) include all letters
+    // Hyphenated words (like Non-Cryst.) contribute a letter from each part
+    $words = preg_split('/\s+/', $sourceTitle);
     $journalAbbr = '';
     foreach ($words as $word) {
-        $word = strtolower(trim($word, '.,;:'));
-        if ($word !== '' && !in_array($word, $ignoreWords)) {
-            $journalAbbr .= $word[0];
+        // Strip punctuation including parentheses and brackets
+        $cleanWord = trim($word, '.,;:()[]');
+        // Split on hyphens to handle words like "Non-Cryst."
+        $parts = preg_split('/[-–—]/', $cleanWord);
+        foreach ($parts as $part) {
+            $part = trim($part, '.,;:()[]');
+            $lowerPart = strtolower($part);
+            // Skip empty, stop words, and words starting with numbers (like years)
+            if ($lowerPart !== '' && !in_array($lowerPart, $ignoreWords) && !preg_match('/^\d/', $lowerPart)) {
+                // Check if word is an acronym (all uppercase, 2+ letters)
+                if (strlen($part) >= 2 && preg_match('/^[A-Z]+$/', $part)) {
+                    $journalAbbr .= $lowerPart;  // Include all letters of acronym
+                } else {
+                    $journalAbbr .= $lowerPart[0];  // Just first letter for regular words
+                }
+            }
         }
     }
-    $journalAbbr = strtolower($journalAbbr);
     
     // Build citekey for journal articles
     $parts = [];
@@ -479,6 +497,7 @@ function generateCitekey(array $fields, ?string $editingCitekey = null): string 
     }
     
     $journal = $fields['journal'] ?? '';
+    $booktitle = $fields['booktitle'] ?? '';
     $volume = $fields['volume'] ?? '';
     $pages = $fields['pages'] ?? '';
     
@@ -503,16 +522,33 @@ function generateCitekey(array $fields, ?string $editingCitekey = null): string 
     // Words to ignore in abbreviations
     $ignoreWords = ['the', 'of', 'and', 'for', 'in', 'on', 'a', 'an', 'to', 'with'];
     
-    // Generate journal abbreviation: first letter of each word, ignoring articles
-    $words = preg_split('/\s+/', $journal);
+    // Use journal or booktitle (for conference proceedings)
+    $sourceTitle = $journal ?: $booktitle;
+    
+    // Generate abbreviation: first letter of each word, ignoring articles and numeric words
+    // Acronyms (all-uppercase words like NMR, MRI) include all letters
+    // Hyphenated words (like Non-Cryst.) contribute a letter from each part
+    $words = preg_split('/\s+/', $sourceTitle);
     $journalAbbr = '';
     foreach ($words as $word) {
-        $word = strtolower(trim($word, '.,;:'));
-        if ($word !== '' && !in_array($word, $ignoreWords)) {
-            $journalAbbr .= $word[0];
+        // Strip punctuation including parentheses and brackets
+        $cleanWord = trim($word, '.,;:()[]');
+        // Split on hyphens to handle words like "Non-Cryst."
+        $parts = preg_split('/[-–—]/', $cleanWord);
+        foreach ($parts as $part) {
+            $part = trim($part, '.,;:()[]');
+            $lowerPart = strtolower($part);
+            // Skip empty, stop words, and words starting with numbers (like years)
+            if ($lowerPart !== '' && !in_array($lowerPart, $ignoreWords) && !preg_match('/^\d/', $lowerPart)) {
+                // Check if word is an acronym (all uppercase, 2+ letters)
+                if (strlen($part) >= 2 && preg_match('/^[A-Z]+$/', $part)) {
+                    $journalAbbr .= $lowerPart;  // Include all letters of acronym
+                } else {
+                    $journalAbbr .= $lowerPart[0];  // Just first letter for regular words
+                }
+            }
         }
     }
-    $journalAbbr = strtolower($journalAbbr);
     
     // Check for "in press" articles (journal but no volume and no pages)
     if ($journalAbbr && empty($volume) && empty($pages) && $year) {
@@ -2209,6 +2245,101 @@ function handleRequest(): void {
                     'totalRemaining' => count($finalEntries),
                     'removedEntries' => $removedEntries
                 ]);
+                break;
+            
+            case 'fetch_publisher_bibtex':
+                // Fetch BibTeX directly from publisher-specific APIs
+                // This is a server-side proxy to avoid CORS issues
+                $doi = $input['doi'] ?? '';
+                if (empty($doi)) {
+                    errorResponse('DOI is required');
+                }
+                
+                $bibtex = null;
+                $source = null;
+                
+                // Elsevier/ScienceDirect (DOIs starting with 10.1016/)
+                if (strpos($doi, '10.1016/') === 0) {
+                    $suffix = substr($doi, 8); // Remove "10.1016/"
+                    // Convert DOI suffix to PII: remove dashes and parentheses, uppercase first char
+                    $pii = preg_replace('/[-()]/', '', $suffix);
+                    $pii = strtoupper(substr($pii, 0, 1)) . substr($pii, 1);
+                    
+                    $url = "https://www.sciencedirect.com/sdfe/arp/cite?pii={$pii}&format=text/x-bibtex&withabstract=true";
+                    
+                    $ch = curl_init();
+                    curl_setopt_array($ch, [
+                        CURLOPT_URL => $url,
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_TIMEOUT => 10,
+                        CURLOPT_FOLLOWLOCATION => true,
+                        CURLOPT_HTTPHEADER => [
+                            'Accept: text/plain, */*',
+                            'User-Agent: BibTeX-Manager/1.0'
+                        ]
+                    ]);
+                    $response = curl_exec($ch);
+                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    
+                    if ($httpCode === 200 && strpos($response, '@') === 0) {
+                        $bibtex = $response;
+                        $source = 'sciencedirect';
+                    }
+                }
+                
+                // Springer (DOIs starting with 10.1007/)
+                if (!$bibtex && strpos($doi, '10.1007/') === 0) {
+                    $url = "https://citation-needed.springer.com/v2/references/" . urlencode($doi) . "?format=bibtex";
+                    
+                    $ch = curl_init();
+                    curl_setopt_array($ch, [
+                        CURLOPT_URL => $url,
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_TIMEOUT => 10,
+                        CURLOPT_FOLLOWLOCATION => true,
+                        CURLOPT_HTTPHEADER => [
+                            'Accept: text/plain, */*',
+                            'User-Agent: BibTeX-Manager/1.0'
+                        ]
+                    ]);
+                    $response = curl_exec($ch);
+                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    
+                    if ($httpCode === 200 && strpos($response, '@') === 0) {
+                        $bibtex = $response;
+                        $source = 'springer';
+                    }
+                }
+                
+                // Nature (DOIs starting with 10.1038/)
+                if (!$bibtex && strpos($doi, '10.1038/') === 0) {
+                    $url = "https://citation-needed.springer.com/v2/references/" . urlencode($doi) . "?format=bibtex";
+                    
+                    $ch = curl_init();
+                    curl_setopt_array($ch, [
+                        CURLOPT_URL => $url,
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_TIMEOUT => 10,
+                        CURLOPT_FOLLOWLOCATION => true,
+                        CURLOPT_HTTPHEADER => [
+                            'Accept: text/plain, */*',
+                            'User-Agent: BibTeX-Manager/1.0'
+                        ]
+                    ]);
+                    $response = curl_exec($ch);
+                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    
+                    if ($httpCode === 200 && strpos($response, '@') === 0) {
+                        $bibtex = $response;
+                        $source = 'springer';
+                    }
+                }
+                
+                if ($bibtex) {
+                    jsonResponse(['bibtex' => $bibtex, 'source' => $source]);
+                } else {
+                    jsonResponse(['bibtex' => null, 'source' => null]);
+                }
                 break;
                 
             default:

@@ -63,6 +63,7 @@
         btnPrev: document.getElementById('btn-prev'),
         btnNext: document.getElementById('btn-next'),
         pageInfo: document.getElementById('page-info'),
+        entriesPerPage: document.getElementById('entries-per-page'),
         
         // DOI lookup
         doiInput: document.getElementById('doi-input'),
@@ -453,6 +454,72 @@
     }
 
     /**
+     * Try to fetch BibTeX directly from publisher-specific APIs
+     * Uses server-side proxy to avoid CORS issues
+     * These often have more complete metadata than CrossRef
+     * @param {string} doi - The DOI to look up
+     * @returns {Object|null} - Parsed BibTeX fields, or null if not available
+     */
+    async function fetchPublisherBibtex(doi) {
+        try {
+            // Check if this DOI is from a supported publisher
+            const supportedPrefixes = ['10.1016/', '10.1007/', '10.1038/'];
+            if (!supportedPrefixes.some(prefix => doi.startsWith(prefix))) {
+                return null;
+            }
+            
+            // Use PHP proxy to fetch publisher BibTeX
+            const result = await apiCall('fetch_publisher_bibtex', { doi });
+            
+            if (result.bibtex) {
+                console.log(`Got BibTeX from ${result.source} for ${doi}`);
+                return parseBibtexFields(result.bibtex);
+            }
+            
+            return null;
+        } catch (e) {
+            console.warn('Publisher BibTeX fetch failed:', e);
+            return null;
+        }
+    }
+
+    /**
+     * Parse a BibTeX string and extract fields
+     * @param {string} bibtex - The BibTeX entry string
+     * @returns {Object} - Object with field names as keys
+     */
+    function parseBibtexFields(bibtex) {
+        const fields = {};
+        
+        // Extract entry type
+        const typeMatch = bibtex.match(/@(\w+)\s*\{/);
+        if (typeMatch) {
+            fields._type = typeMatch[1].toLowerCase();
+        }
+        
+        // Match field = {value} or field = value patterns
+        // Handle multi-line values and nested braces
+        const fieldRegex = /(\w+)\s*=\s*(?:\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}|"([^"]*)"|(\d+))/g;
+        let match;
+        
+        while ((match = fieldRegex.exec(bibtex)) !== null) {
+            const fieldName = match[1].toLowerCase();
+            const value = match[2] || match[3] || match[4];
+            if (value) {
+                // Clean up the value
+                let cleanValue = value.trim();
+                // Remove DOI URL prefix if present
+                if (fieldName === 'doi') {
+                    cleanValue = cleanValue.replace(/^https?:\/\/doi\.org\//, '');
+                }
+                fields[fieldName] = cleanValue;
+            }
+        }
+        
+        return fields;
+    }
+
+    /**
      * Check if a DOI should use DataCite API instead of CrossRef
      * Returns true for Zenodo (10.5281/zenodo.*) and arXiv (10.48550/*) DOIs
      */
@@ -638,10 +705,12 @@
     }
 
     function renderEntries() {
-        const start = (state.currentPage - 1) * state.entriesPerPage;
-        const end = start + state.entriesPerPage;
+        // Handle "All" case (Infinity) specially to avoid NaN from 0 * Infinity
+        const showAll = state.entriesPerPage === Infinity;
+        const start = showAll ? 0 : (state.currentPage - 1) * state.entriesPerPage;
+        const end = showAll ? state.filteredEntries.length : start + state.entriesPerPage;
         const pageEntries = state.filteredEntries.slice(start, end);
-        const totalPages = Math.max(1, Math.ceil(state.filteredEntries.length / state.entriesPerPage));
+        const totalPages = showAll ? 1 : Math.max(1, Math.ceil(state.filteredEntries.length / state.entriesPerPage));
 
         if (pageEntries.length === 0) {
             elements.entriesBody.innerHTML = `
@@ -840,164 +909,218 @@
         try {
             const useDataCite = shouldUseDataCite(doi);
             const isArxiv = doi.startsWith('10.48550/');
-            let work, ssTitle = null;
-            
-            if (useDataCite) {
-                // Use DataCite API for Zenodo and arXiv DOIs
-                const response = await fetch(`https://api.datacite.org/dois/${encodeURIComponent(doi)}`);
-                if (!response.ok) {
-                    if (response.status === 404) {
-                        throw new Error('DOI not found');
-                    }
-                    throw new Error('Failed to fetch DOI metadata from DataCite');
-                }
-                const data = await response.json();
-                const attrs = data.data.attributes;
-                
-                work = {
-                    author: attrs.creators ? attrs.creators.map(parseDataCiteCreator) : null,
-                    title: attrs.titles ? [attrs.titles[0]?.title] : null,
-                    published: attrs.publicationYear ? { 'date-parts': [[attrs.publicationYear]] } : null,
-                    publisher: attrs.publisher
-                };
-                
-                // For arXiv, extract the arXiv ID for the eprint field
-                if (isArxiv && attrs.identifiers) {
-                    const arxivId = attrs.identifiers.find(id => id.identifierType === 'arXiv');
-                    if (arxivId) {
-                        work.arxivId = arxivId.identifier;
-                    }
-                }
-            } else {
-                // Fetch CrossRef and Semantic Scholar in parallel
-                const [crossrefResponse, ssTitleResult] = await Promise.all([
-                    fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`),
-                    fetchSemanticScholarTitle(doi)
-                ]);
-                ssTitle = ssTitleResult;
-                
-                if (!crossrefResponse.ok) {
-                    if (crossrefResponse.status === 404) {
-                        throw new Error('DOI not found');
-                    }
-                    throw new Error('Failed to fetch DOI metadata');
-                }
-                
-                const data = await crossrefResponse.json();
-                work = data.message;
-            }
+            let fields = {};
+            let entryType;
+            let usedPublisherBibtex = false;
             
             // Keep current citekey
             const currentCitekey = elements.entryCitekey.value;
             
-            // Update entry type based on CrossRef type
-            let entryType;
-            if (isArxiv) {
-                entryType = 'article';
-            } else if (useDataCite) {
-                entryType = 'misc';
-            } else {
-                entryType = detectEntryType(work.type, work);
-            }
-            elements.entryType.value = entryType;
-            document.body.dataset.entryType = entryType;
-            
-            // Build fields object
-            const fields = {};
-            
-            // Authors - try authors first, fall back to editors
-            if (work.author && work.author.length > 0) {
-                fields.author = formatPersonList(work.author);
-            } else if (work.editor && work.editor.length > 0) {
-                // No authors, use editors (common for edited books)
-                fields.editor = formatPersonList(work.editor);
-            }
-            
-            // Title (convert HTML to LaTeX, pick best between CrossRef and Semantic Scholar)
-            if (work.title && work.title[0]) {
-                fields.title = htmlToLatex(pickBetterTitle(work.title[0], ssTitle));
-            }
-            
-            // Journal - prefer abbreviated name, with fallback to abbreviation database
-            if (!useDataCite && entryType === 'article') {
-                let journal = null;
-                if (work['short-container-title'] && work['short-container-title'][0]) {
-                    journal = work['short-container-title'][0];
-                } else if (work['container-title'] && work['container-title'][0]) {
-                    journal = work['container-title'][0];
-                }
-                if (journal) {
-                    fields.journal = lookupJournalAbbreviation(journal);
-                }
-            }
-            
-            // Publisher (for books, reports, Zenodo, but not arXiv)
-            if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
-                fields.publisher = work.publisher;
-            }
-            
-            // ISBN for books
-            if (!useDataCite && work.ISBN && work.ISBN[0] && (entryType === 'book' || entryType === 'incollection')) {
-                fields.isbn = work.ISBN[0];
-            }
-            
-            // Edition for books
-            if (!useDataCite && work['edition-number'] && (entryType === 'book' || entryType === 'incollection')) {
-                fields.edition = work['edition-number'];
-            }
-            
-            // arXiv-specific fields
-            if (isArxiv) {
-                if (work.arxivId) {
-                    fields.eprint = work.arxivId;
-                }
-                fields.archiveprefix = 'arXiv';
-            }
-            
-            // Year
-            if (work.published) {
-                const dateParts = work.published['date-parts'];
-                if (dateParts && dateParts[0] && dateParts[0][0]) {
-                    fields.year = String(dateParts[0][0]);
-                }
-            } else if (work.issued) {
-                const dateParts = work.issued['date-parts'];
-                if (dateParts && dateParts[0] && dateParts[0][0]) {
-                    fields.year = String(dateParts[0][0]);
-                }
-            }
-            
-            // Volume (CrossRef only, for articles)
-            if (!useDataCite && work.volume && entryType === 'article') {
-                fields.volume = work.volume;
-            }
-            
-            // Issue/Number (CrossRef only, for articles)
-            if (!useDataCite && work.issue && entryType === 'article') {
-                fields.number = work.issue;
-            }
-            
-            // Pages (CrossRef only)
+            // Try publisher BibTeX first (most authoritative source)
             if (!useDataCite) {
-                if (work.page) {
-                    fields.pages = work.page;
-                } else if (work['article-number']) {
-                    // Filter out manuscript IDs like "jacs.6c01081"
-                    const artNum = work['article-number'];
-                    const isManuscriptId = /^[a-z]+\.\d+[a-z]\d+$/i.test(artNum);
-                    if (!isManuscriptId) {
-                        fields.pages = artNum;
+                const pubBibtex = await fetchPublisherBibtex(doi);
+                if (pubBibtex && Object.keys(pubBibtex).length > 2) {
+                    usedPublisherBibtex = true;
+                    
+                    // Map publisher BibTeX type to our entry type
+                    const typeMap = {
+                        'article': 'article',
+                        'inbook': 'incollection',
+                        'incollection': 'incollection',
+                        'inproceedings': 'inproceedings',
+                        'book': 'book',
+                        'proceedings': 'book',
+                        'phdthesis': 'phdthesis',
+                        'mastersthesis': 'mastersthesis',
+                        'techreport': 'techreport',
+                        'misc': 'misc'
+                    };
+                    entryType = typeMap[pubBibtex._type] || 'article';
+                    
+                    // Copy fields from publisher BibTeX
+                    if (pubBibtex.author) fields.author = pubBibtex.author;
+                    if (pubBibtex.title) fields.title = htmlToLatex(pubBibtex.title);
+                    if (pubBibtex.journal) fields.journal = lookupJournalAbbreviation(pubBibtex.journal);
+                    if (pubBibtex.booktitle) fields.booktitle = pubBibtex.booktitle;
+                    if (pubBibtex.series) fields.booktitle = pubBibtex.series; // ScienceDirect uses series
+                    if (pubBibtex.publisher) fields.publisher = pubBibtex.publisher;
+                    if (pubBibtex.year) fields.year = pubBibtex.year;
+                    if (pubBibtex.volume) fields.volume = pubBibtex.volume;
+                    if (pubBibtex.number) fields.number = pubBibtex.number;
+                    if (pubBibtex.pages) fields.pages = pubBibtex.pages;
+                    if (pubBibtex.isbn) fields.isbn = pubBibtex.isbn;
+                    if (pubBibtex.issn) fields.issn = pubBibtex.issn;
+                    if (pubBibtex.edition) fields.edition = pubBibtex.edition;
+                    if (pubBibtex.abstract) fields.abstract = pubBibtex.abstract;
+                    fields.doi = doi;
+                    
+                    console.log('Using publisher BibTeX as primary source');
+                }
+            }
+            
+            // Fall back to CrossRef/DataCite if publisher BibTeX not available
+            if (!usedPublisherBibtex) {
+                let work, ssTitle = null;
+                
+                if (useDataCite) {
+                    // Use DataCite API for Zenodo and arXiv DOIs
+                    const response = await fetch(`https://api.datacite.org/dois/${encodeURIComponent(doi)}`);
+                    if (!response.ok) {
+                        if (response.status === 404) {
+                            throw new Error('DOI not found');
+                        }
+                        throw new Error('Failed to fetch DOI metadata from DataCite');
+                    }
+                    const data = await response.json();
+                    const attrs = data.data.attributes;
+                    
+                    work = {
+                        author: attrs.creators ? attrs.creators.map(parseDataCiteCreator) : null,
+                        title: attrs.titles ? [attrs.titles[0]?.title] : null,
+                        published: attrs.publicationYear ? { 'date-parts': [[attrs.publicationYear]] } : null,
+                        publisher: attrs.publisher
+                    };
+                    
+                    // For arXiv, extract the arXiv ID for the eprint field
+                    if (isArxiv && attrs.identifiers) {
+                        const arxivId = attrs.identifiers.find(id => id.identifierType === 'arXiv');
+                        if (arxivId) {
+                            work.arxivId = arxivId.identifier;
+                        }
+                    }
+                } else {
+                    // Fetch CrossRef and Semantic Scholar in parallel
+                    const [crossrefResponse, ssTitleResult] = await Promise.all([
+                        fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`),
+                        fetchSemanticScholarTitle(doi)
+                    ]);
+                    ssTitle = ssTitleResult;
+                    
+                    if (!crossrefResponse.ok) {
+                        if (crossrefResponse.status === 404) {
+                            throw new Error('DOI not found');
+                        }
+                        throw new Error('Failed to fetch DOI metadata');
+                    }
+                    
+                    const data = await crossrefResponse.json();
+                    work = data.message;
+                }
+                
+                // Determine entry type
+                if (isArxiv) {
+                    entryType = 'article';
+                } else if (useDataCite) {
+                    entryType = 'misc';
+                } else {
+                    entryType = detectEntryType(work.type, work);
+                }
+                
+                // Authors - try authors first, fall back to editors
+                if (work.author && work.author.length > 0) {
+                    fields.author = formatPersonList(work.author);
+                } else if (work.editor && work.editor.length > 0) {
+                    fields.editor = formatPersonList(work.editor);
+                }
+                
+                // Title (convert HTML to LaTeX, pick best between CrossRef and Semantic Scholar)
+                if (work.title && work.title[0]) {
+                    fields.title = htmlToLatex(pickBetterTitle(work.title[0], ssTitle));
+                }
+                
+                // Journal - prefer abbreviated name
+                if (!useDataCite && entryType === 'article') {
+                    let journal = null;
+                    if (work['short-container-title'] && work['short-container-title'][0]) {
+                        journal = work['short-container-title'][0];
+                    } else if (work['container-title'] && work['container-title'][0]) {
+                        journal = work['container-title'][0];
+                    }
+                    if (journal) {
+                        fields.journal = lookupJournalAbbreviation(journal);
                     }
                 }
+                
+                // Booktitle for conference proceedings and book chapters
+                if (!useDataCite && (entryType === 'inproceedings' || entryType === 'incollection')) {
+                    if (work['container-title'] && work['container-title'][0]) {
+                        fields.booktitle = work['container-title'][0];
+                    } else if (work.event && work.event.name) {
+                        fields.booktitle = work.event.name;
+                    }
+                }
+                
+                // Publisher
+                if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'techreport' || entryType === 'inproceedings' || (useDataCite && !isArxiv))) {
+                    fields.publisher = work.publisher;
+                }
+                
+                // ISBN for books
+                if (!useDataCite && work.ISBN && work.ISBN[0] && (entryType === 'book' || entryType === 'incollection')) {
+                    fields.isbn = work.ISBN[0];
+                }
+                
+                // Edition for books
+                if (!useDataCite && work['edition-number'] && (entryType === 'book' || entryType === 'incollection')) {
+                    fields.edition = work['edition-number'];
+                }
+                
+                // arXiv-specific fields
+                if (isArxiv) {
+                    if (work.arxivId) {
+                        fields.eprint = work.arxivId;
+                    }
+                    fields.archiveprefix = 'arXiv';
+                }
+                
+                // Year
+                if (work.published) {
+                    const dateParts = work.published['date-parts'];
+                    if (dateParts && dateParts[0] && dateParts[0][0]) {
+                        fields.year = String(dateParts[0][0]);
+                    }
+                } else if (work.issued) {
+                    const dateParts = work.issued['date-parts'];
+                    if (dateParts && dateParts[0] && dateParts[0][0]) {
+                        fields.year = String(dateParts[0][0]);
+                    }
+                }
+                
+                // Volume
+                if (!useDataCite && work.volume && (entryType === 'article' || entryType === 'inproceedings' || entryType === 'incollection')) {
+                    fields.volume = work.volume;
+                }
+                
+                // Issue/Number
+                if (!useDataCite && work.issue && (entryType === 'article' || entryType === 'inproceedings')) {
+                    fields.number = work.issue;
+                }
+                
+                // Pages
+                if (!useDataCite) {
+                    if (work.page) {
+                        fields.pages = work.page;
+                    } else if (work['article-number']) {
+                        const artNum = work['article-number'];
+                        const isManuscriptId = /^[a-z]+\.\d+[a-z]\d+$/i.test(artNum);
+                        if (!isManuscriptId) {
+                            fields.pages = artNum;
+                        }
+                    }
+                }
+                
+                // DOI
+                fields.doi = doi;
+                
+                // ISSN
+                if (!useDataCite && work.ISSN && work.ISSN[0] && entryType === 'article') {
+                    fields.issn = work.ISSN[0];
+                }
             }
             
-            // DOI
-            fields.doi = doi;
-            
-            // ISSN (CrossRef only, for articles)
-            if (!useDataCite && work.ISSN && work.ISSN[0] && entryType === 'article') {
-                fields.issn = work.ISSN[0];
-            }
+            // Set entry type in form
+            elements.entryType.value = entryType;
+            document.body.dataset.entryType = entryType;
             
             // Detect "in press" articles (no volume and no pages)
             if (entryType === 'article' && !fields.volume && !fields.pages) {
@@ -1539,186 +1662,239 @@
         try {
             const useDataCite = shouldUseDataCite(doi);
             const isArxiv = doi.startsWith('10.48550/');
-            let work, ssTitle = null;
-            
-            if (useDataCite) {
-                // Use DataCite API for Zenodo and arXiv DOIs
-                const response = await fetch(`https://api.datacite.org/dois/${encodeURIComponent(doi)}`);
-                if (!response.ok) {
-                    if (response.status === 404) {
-                        throw new Error('DOI not found');
-                    }
-                    throw new Error('Failed to fetch DOI metadata from DataCite');
-                }
-                const data = await response.json();
-                const attrs = data.data.attributes;
-                
-                // Convert DataCite format to work-like structure
-                work = {
-                    author: attrs.creators ? attrs.creators.map(parseDataCiteCreator) : null,
-                    title: attrs.titles ? [attrs.titles[0]?.title] : null,
-                    'container-title': attrs.container ? [attrs.container.title] : null,
-                    published: attrs.publicationYear ? { 'date-parts': [[attrs.publicationYear]] } : null,
-                    publisher: attrs.publisher
-                };
-                
-                // For arXiv, extract the arXiv ID for the eprint field
-                if (isArxiv && attrs.identifiers) {
-                    const arxivId = attrs.identifiers.find(id => id.identifierType === 'arXiv');
-                    if (arxivId) {
-                        work.arxivId = arxivId.identifier;
-                    }
-                }
-            } else {
-                // Fetch CrossRef and Semantic Scholar in parallel
-                // Note: Don't set User-Agent header - browsers forbid it and some silently fail
-                let crossrefResponse;
-                try {
-                    [crossrefResponse, ssTitle] = await Promise.all([
-                        fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`),
-                        fetchSemanticScholarTitle(doi)
-                    ]);
-                } catch (networkError) {
-                    // Network-level failure (blocked, CORS, offline, etc.)
-                    console.error('Network error fetching DOI:', networkError);
-                    throw new Error('Network error - check your internet connection or try again');
-                }
-                
-                if (!crossrefResponse.ok) {
-                    if (crossrefResponse.status === 404) {
-                        throw new Error('DOI not found in CrossRef');
-                    }
-                    throw new Error(`CrossRef returned ${crossrefResponse.status}: ${crossrefResponse.statusText}`);
-                }
-                
-                const data = await crossrefResponse.json();
-                if (!data || !data.message) {
-                    throw new Error('Invalid response from CrossRef');
-                }
-                work = data.message;
-            }
-            
-            // Determine entry type
             let entryType;
-            if (isArxiv) {
-                entryType = 'article';
-            } else if (useDataCite) {
-                entryType = 'misc';
-            } else {
-                entryType = detectEntryType(work.type, work);
-            }
+            let usedPublisherBibtex = false;
             
             // Parse data into BibTeX fields
             const entry = {
-                type: entryType,
+                type: '',
                 citekey: '',
                 fields: {}
             };
             
-            // Authors - try authors first, fall back to editors
-            if (work.author && work.author.length > 0) {
-                entry.fields.author = formatPersonList(work.author);
-            } else if (work.editor && work.editor.length > 0) {
-                entry.fields.editor = formatPersonList(work.editor);
-            }
-            
-            // Title - pick best between CrossRef and Semantic Scholar, convert to LaTeX
-            if (work.title && work.title[0]) {
-                entry.fields.title = htmlToLatex(pickBetterTitle(work.title[0], ssTitle));
-            }
-            
-            // Journal - prefer abbreviated name, with fallback to abbreviation database (for articles only)
-            if (entryType === 'article') {
-                let journal = null;
-                if (work['short-container-title'] && work['short-container-title'][0]) {
-                    journal = work['short-container-title'][0];
-                } else if (work['container-title'] && work['container-title'][0]) {
-                    journal = work['container-title'][0];
-                }
-                // Look up abbreviation (passes through unchanged if not found)
-                if (journal) {
-                    entry.fields.journal = lookupJournalAbbreviation(journal);
-                }
-            }
-            
-            // Publisher (for books, reports, Zenodo/DataCite sources, but not arXiv)
-            if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
-                entry.fields.publisher = work.publisher;
-            }
-            
-            // ISBN for books
-            if (!useDataCite && work.ISBN && work.ISBN[0] && (entryType === 'book' || entryType === 'incollection')) {
-                entry.fields.isbn = work.ISBN[0];
-            }
-            
-            // Edition for books
-            if (!useDataCite && work['edition-number'] && (entryType === 'book' || entryType === 'incollection')) {
-                entry.fields.edition = work['edition-number'];
-            }
-            
-            // arXiv-specific fields
-            if (isArxiv) {
-                if (work.arxivId) {
-                    entry.fields.eprint = work.arxivId;
-                }
-                entry.fields.archiveprefix = 'arXiv';
-            }
-            
-            // Year
-            if (work.published) {
-                const dateParts = work.published['date-parts'];
-                if (dateParts && dateParts[0] && dateParts[0][0]) {
-                    entry.fields.year = String(dateParts[0][0]);
-                }
-            } else if (work.issued) {
-                const dateParts = work.issued['date-parts'];
-                if (dateParts && dateParts[0] && dateParts[0][0]) {
-                    entry.fields.year = String(dateParts[0][0]);
-                }
-            }
-            
-            // Volume (CrossRef only, for articles)
-            if (!useDataCite && work.volume && entryType === 'article') {
-                entry.fields.volume = work.volume;
-            }
-            
-            // Issue/Number (CrossRef only, for articles)
-            if (!useDataCite && work.issue && entryType === 'article') {
-                entry.fields.number = work.issue;
-            }
-            
-            // Pages (CrossRef only)
+            // Try publisher BibTeX first (most authoritative source)
             if (!useDataCite) {
-                if (work.page) {
-                    entry.fields.pages = work.page;
-                } else if (work['article-number']) {
-                    // Filter out manuscript IDs like "jacs.6c01081" - these look like DOI suffixes
-                    // Real article numbers are numeric, start with letter+digits, or are simple IDs
-                    const artNum = work['article-number'];
-                    const isManuscriptId = /^[a-z]+\.\d+[a-z]\d+$/i.test(artNum);
-                    if (!isManuscriptId) {
-                        entry.fields.pages = artNum;
+                const pubBibtex = await fetchPublisherBibtex(doi);
+                if (pubBibtex && Object.keys(pubBibtex).length > 2) {
+                    usedPublisherBibtex = true;
+                    
+                    // Map publisher BibTeX type to our entry type
+                    const typeMap = {
+                        'article': 'article',
+                        'inbook': 'incollection',
+                        'incollection': 'incollection',
+                        'inproceedings': 'inproceedings',
+                        'book': 'book',
+                        'proceedings': 'book',
+                        'phdthesis': 'phdthesis',
+                        'mastersthesis': 'mastersthesis',
+                        'techreport': 'techreport',
+                        'misc': 'misc'
+                    };
+                    entryType = typeMap[pubBibtex._type] || 'article';
+                    entry.type = entryType;
+                    
+                    // Copy fields from publisher BibTeX
+                    if (pubBibtex.author) entry.fields.author = pubBibtex.author;
+                    if (pubBibtex.title) entry.fields.title = htmlToLatex(pubBibtex.title);
+                    if (pubBibtex.journal) entry.fields.journal = lookupJournalAbbreviation(pubBibtex.journal);
+                    if (pubBibtex.booktitle) entry.fields.booktitle = pubBibtex.booktitle;
+                    if (pubBibtex.series) entry.fields.booktitle = pubBibtex.series; // ScienceDirect uses series
+                    if (pubBibtex.publisher) entry.fields.publisher = pubBibtex.publisher;
+                    if (pubBibtex.year) entry.fields.year = pubBibtex.year;
+                    if (pubBibtex.volume) entry.fields.volume = pubBibtex.volume;
+                    if (pubBibtex.number) entry.fields.number = pubBibtex.number;
+                    if (pubBibtex.pages) entry.fields.pages = pubBibtex.pages;
+                    if (pubBibtex.isbn) entry.fields.isbn = pubBibtex.isbn;
+                    if (pubBibtex.issn) entry.fields.issn = pubBibtex.issn;
+                    if (pubBibtex.edition) entry.fields.edition = pubBibtex.edition;
+                    if (pubBibtex.abstract) entry.fields.abstract = pubBibtex.abstract;
+                    entry.fields.doi = doi;
+                    
+                    console.log('Using publisher BibTeX as primary source');
+                }
+            }
+            
+            // Fall back to CrossRef/DataCite if publisher BibTeX not available
+            if (!usedPublisherBibtex) {
+                let work, ssTitle = null;
+                
+                if (useDataCite) {
+                    // Use DataCite API for Zenodo and arXiv DOIs
+                    const response = await fetch(`https://api.datacite.org/dois/${encodeURIComponent(doi)}`);
+                    if (!response.ok) {
+                        if (response.status === 404) {
+                            throw new Error('DOI not found');
+                        }
+                        throw new Error('Failed to fetch DOI metadata from DataCite');
+                    }
+                    const data = await response.json();
+                    const attrs = data.data.attributes;
+                    
+                    // Convert DataCite format to work-like structure
+                    work = {
+                        author: attrs.creators ? attrs.creators.map(parseDataCiteCreator) : null,
+                        title: attrs.titles ? [attrs.titles[0]?.title] : null,
+                        'container-title': attrs.container ? [attrs.container.title] : null,
+                        published: attrs.publicationYear ? { 'date-parts': [[attrs.publicationYear]] } : null,
+                        publisher: attrs.publisher
+                    };
+                    
+                    // For arXiv, extract the arXiv ID for the eprint field
+                    if (isArxiv && attrs.identifiers) {
+                        const arxivId = attrs.identifiers.find(id => id.identifierType === 'arXiv');
+                        if (arxivId) {
+                            work.arxivId = arxivId.identifier;
+                        }
+                    }
+                } else {
+                    // Fetch CrossRef and Semantic Scholar in parallel
+                    let crossrefResponse;
+                    try {
+                        [crossrefResponse, ssTitle] = await Promise.all([
+                            fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`),
+                            fetchSemanticScholarTitle(doi)
+                        ]);
+                    } catch (networkError) {
+                        console.error('Network error fetching DOI:', networkError);
+                        throw new Error('Network error - check your internet connection or try again');
+                    }
+                    
+                    if (!crossrefResponse.ok) {
+                        if (crossrefResponse.status === 404) {
+                            throw new Error('DOI not found in CrossRef');
+                        }
+                        throw new Error(`CrossRef returned ${crossrefResponse.status}: ${crossrefResponse.statusText}`);
+                    }
+                    
+                    const data = await crossrefResponse.json();
+                    if (!data || !data.message) {
+                        throw new Error('Invalid response from CrossRef');
+                    }
+                    work = data.message;
+                }
+                
+                // Determine entry type
+                if (isArxiv) {
+                    entryType = 'article';
+                } else if (useDataCite) {
+                    entryType = 'misc';
+                } else {
+                    entryType = detectEntryType(work.type, work);
+                }
+                entry.type = entryType;
+                
+                // Authors - try authors first, fall back to editors
+                if (work.author && work.author.length > 0) {
+                    entry.fields.author = formatPersonList(work.author);
+                } else if (work.editor && work.editor.length > 0) {
+                    entry.fields.editor = formatPersonList(work.editor);
+                }
+                
+                // Title - pick best between CrossRef and Semantic Scholar, convert to LaTeX
+                if (work.title && work.title[0]) {
+                    entry.fields.title = htmlToLatex(pickBetterTitle(work.title[0], ssTitle));
+                }
+                
+                // Journal - prefer abbreviated name
+                if (entryType === 'article') {
+                    let journal = null;
+                    if (work['short-container-title'] && work['short-container-title'][0]) {
+                        journal = work['short-container-title'][0];
+                    } else if (work['container-title'] && work['container-title'][0]) {
+                        journal = work['container-title'][0];
+                    }
+                    if (journal) {
+                        entry.fields.journal = lookupJournalAbbreviation(journal);
                     }
                 }
-            }
-            
-            // DOI
-            entry.fields.doi = doi;
-            
-            // URL
-            if (work.URL) {
-                entry.fields.url = work.URL;
-            } else if (useDataCite) {
-                entry.fields.url = `https://doi.org/${doi}`;
-            }
-            
-            // ISSN (CrossRef only, for articles)
-            if (!useDataCite && work.ISSN && work.ISSN[0] && entryType === 'article') {
-                entry.fields.issn = work.ISSN[0];
+                
+                // Booktitle for conference proceedings and book chapters
+                if (!useDataCite && (entryType === 'inproceedings' || entryType === 'incollection')) {
+                    if (work['container-title'] && work['container-title'][0]) {
+                        entry.fields.booktitle = work['container-title'][0];
+                    } else if (work.event && work.event.name) {
+                        entry.fields.booktitle = work.event.name;
+                    }
+                }
+                
+                // Publisher
+                if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'inproceedings' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
+                    entry.fields.publisher = work.publisher;
+                }
+                
+                // ISBN for books
+                if (!useDataCite && work.ISBN && work.ISBN[0] && (entryType === 'book' || entryType === 'incollection')) {
+                    entry.fields.isbn = work.ISBN[0];
+                }
+                
+                // Edition for books
+                if (!useDataCite && work['edition-number'] && (entryType === 'book' || entryType === 'incollection')) {
+                    entry.fields.edition = work['edition-number'];
+                }
+                
+                // arXiv-specific fields
+                if (isArxiv) {
+                    if (work.arxivId) {
+                        entry.fields.eprint = work.arxivId;
+                    }
+                    entry.fields.archiveprefix = 'arXiv';
+                }
+                
+                // Year
+                if (work.published) {
+                    const dateParts = work.published['date-parts'];
+                    if (dateParts && dateParts[0] && dateParts[0][0]) {
+                        entry.fields.year = String(dateParts[0][0]);
+                    }
+                } else if (work.issued) {
+                    const dateParts = work.issued['date-parts'];
+                    if (dateParts && dateParts[0] && dateParts[0][0]) {
+                        entry.fields.year = String(dateParts[0][0]);
+                    }
+                }
+                
+                // Volume
+                if (!useDataCite && work.volume && (entryType === 'article' || entryType === 'inproceedings' || entryType === 'incollection')) {
+                    entry.fields.volume = work.volume;
+                }
+                
+                // Issue/Number
+                if (!useDataCite && work.issue && (entryType === 'article' || entryType === 'inproceedings')) {
+                    entry.fields.number = work.issue;
+                }
+                
+                // Pages
+                if (!useDataCite) {
+                    if (work.page) {
+                        entry.fields.pages = work.page;
+                    } else if (work['article-number']) {
+                        const artNum = work['article-number'];
+                        const isManuscriptId = /^[a-z]+\.\d+[a-z]\d+$/i.test(artNum);
+                        if (!isManuscriptId) {
+                            entry.fields.pages = artNum;
+                        }
+                    }
+                }
+                
+                // DOI
+                entry.fields.doi = doi;
+                
+                // URL
+                if (work.URL) {
+                    entry.fields.url = work.URL;
+                } else if (useDataCite) {
+                    entry.fields.url = `https://doi.org/${doi}`;
+                }
+                
+                // ISSN
+                if (!useDataCite && work.ISSN && work.ISSN[0] && entryType === 'article') {
+                    entry.fields.issn = work.ISSN[0];
+                }
             }
             
             // Detect "in press" articles (no volume and no pages)
-            if (entryType === 'article' && !entry.fields.volume && !entry.fields.pages) {
+            if (entry.type === 'article' && !entry.fields.volume && !entry.fields.pages) {
                 entry.fields.note = 'In press';
             }
             
@@ -2731,13 +2907,22 @@
                             }
                         }
                         
+                        // Booktitle for conference proceedings and book chapters
+                        if (entryType === 'inproceedings' || entryType === 'incollection') {
+                            if (work['container-title']) {
+                                fields.booktitle = work['container-title'];
+                            } else if (work.event && work.event.name) {
+                                fields.booktitle = work.event.name;
+                            }
+                        }
+                        
                         // Year
                         if (work.year) {
                             fields.year = String(work.year);
                         }
                         
-                        // Volume, number, pages (for articles)
-                        if (entryType === 'article') {
+                        // Volume, number, pages (for articles, inproceedings, and incollection)
+                        if (entryType === 'article' || entryType === 'inproceedings' || entryType === 'incollection') {
                             if (work.volume) fields.volume = work.volume;
                             if (work.issue) fields.number = work.issue;
                             if (work.page) {
@@ -2761,8 +2946,8 @@
                             fields.archiveprefix = 'arXiv';
                         }
                         
-                        // Publisher (for books, reports, DataCite but not arXiv)
-                        if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
+                        // Publisher (for books, reports, inproceedings, DataCite but not arXiv)
+                        if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'inproceedings' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
                             fields.publisher = work.publisher;
                         }
                         
@@ -3002,12 +3187,21 @@
                                         }
                                     }
                                     
+                                    // Booktitle for conference proceedings and book chapters
+                                    if (entryType === 'inproceedings' || entryType === 'incollection') {
+                                        if (work['container-title']) {
+                                            fields.booktitle = work['container-title'];
+                                        } else if (work.event && work.event.name) {
+                                            fields.booktitle = work.event.name;
+                                        }
+                                    }
+                                    
                                     if (work.year) {
                                         fields.year = String(work.year);
                                     }
                                     
-                                    // Volume, number, pages (for articles)
-                                    if (entryType === 'article') {
+                                    // Volume, number, pages (for articles, inproceedings, and incollection)
+                                    if (entryType === 'article' || entryType === 'inproceedings' || entryType === 'incollection') {
                                         if (work.volume) fields.volume = work.volume;
                                         if (work.issue) fields.number = work.issue;
                                         if (work.page) {
@@ -3029,8 +3223,8 @@
                                         fields.archiveprefix = 'arXiv';
                                     }
                                     
-                                    // Publisher (for books, reports, DataCite but not arXiv)
-                                    if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
+                                    // Publisher (for books, reports, inproceedings, DataCite but not arXiv)
+                                    if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'inproceedings' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
                                         fields.publisher = work.publisher;
                                     }
                                     
@@ -3369,11 +3563,23 @@
         });
         
         elements.btnNext.addEventListener('click', () => {
-            const totalPages = Math.ceil(state.filteredEntries.length / state.entriesPerPage);
+            const totalPages = state.entriesPerPage === Infinity ? 1 : Math.ceil(state.filteredEntries.length / state.entriesPerPage);
             if (state.currentPage < totalPages) {
                 state.currentPage++;
                 renderEntries();
             }
+        });
+        
+        // Entries per page
+        elements.entriesPerPage.addEventListener('change', (e) => {
+            const value = e.target.value;
+            if (value === 'all') {
+                state.entriesPerPage = Infinity;
+            } else {
+                state.entriesPerPage = parseInt(value, 10);
+            }
+            state.currentPage = 1;  // Reset to first page
+            renderEntries();
         });
         
         // Entry click to edit
