@@ -399,8 +399,10 @@ function generateCitekeyForEntry(array $entry): string {
         foreach ($parts as $part) {
             $part = trim($part, '.,;:()[]');
             $lowerPart = strtolower($part);
-            // Skip empty, stop words, and words starting with numbers (like years)
-            if ($lowerPart !== '' && !in_array($lowerPart, $ignoreWords) && !preg_match('/^\d/', $lowerPart)) {
+            // Single uppercase letters (A, B, C) are journal series designators, not articles
+            $isSeriesLetter = (strlen($part) === 1 && preg_match('/^[A-Z]$/', $part));
+            // Skip empty, stop words (unless series letter), and words starting with numbers
+            if ($lowerPart !== '' && ($isSeriesLetter || !in_array($lowerPart, $ignoreWords)) && !preg_match('/^\d/', $lowerPart)) {
                 // Check if word is an acronym (all uppercase, 2+ letters)
                 if (strlen($part) >= 2 && preg_match('/^[A-Z]+$/', $part)) {
                     $journalAbbr .= $lowerPart;  // Include all letters of acronym
@@ -412,27 +414,38 @@ function generateCitekeyForEntry(array $entry): string {
     }
     
     // Build citekey for journal articles
+    // Sanitize parts to remove characters illegal in citekeys (commas, spaces, etc.)
+    $sanitize = function($s) {
+        return preg_replace('/[^a-zA-Z0-9]/', '', $s);
+    };
     $parts = [];
     if ($journalAbbr) $parts[] = $journalAbbr;
-    if ($volume) $parts[] = $volume;
-    if ($pages) $parts[] = $pages;
-    if ($year) $parts[] = $year;
+    if ($volume) $parts[] = $sanitize($volume);
+    if ($pages) $parts[] = $sanitize($pages);
+    if ($year) $parts[] = $sanitize($year);
     
     if (!empty($parts) && $journalAbbr) {
         return implode('_', $parts);
     }
     
     // For books/non-journal entries: use first letter of each title word
+    // Acronyms (all-uppercase like NMR) include all letters
     if ($title) {
         $cleanTitle = preg_replace('/[{}]/', '', $title);
         $titleWords = preg_split('/\s+/', $cleanTitle);
         $titleAbbr = '';
         foreach ($titleWords as $word) {
-            $word = strtolower(trim($word, '.,;:()[]'));
-            if ($word !== '' && !in_array($word, $ignoreWords)) {
-                $firstChar = mb_substr($word, 0, 1);
+            $cleanWord = trim($word, '.,;:()[]');
+            $lowerWord = strtolower($cleanWord);
+            if ($lowerWord !== '' && !in_array($lowerWord, $ignoreWords)) {
+                $firstChar = mb_substr($lowerWord, 0, 1);
                 if (preg_match('/[a-z]/i', $firstChar)) {
-                    $titleAbbr .= strtolower($firstChar);
+                    // Check if word is an acronym (all uppercase, 2+ letters)
+                    if (strlen($cleanWord) >= 2 && preg_match('/^[A-Z]+$/', $cleanWord)) {
+                        $titleAbbr .= $lowerWord;  // Include all letters of acronym
+                    } else {
+                        $titleAbbr .= strtolower($firstChar);
+                    }
                 }
             }
         }
@@ -538,8 +551,10 @@ function generateCitekey(array $fields, ?string $editingCitekey = null): string 
         foreach ($parts as $part) {
             $part = trim($part, '.,;:()[]');
             $lowerPart = strtolower($part);
-            // Skip empty, stop words, and words starting with numbers (like years)
-            if ($lowerPart !== '' && !in_array($lowerPart, $ignoreWords) && !preg_match('/^\d/', $lowerPart)) {
+            // Single uppercase letters (A, B, C) are journal series designators, not articles
+            $isSeriesLetter = (strlen($part) === 1 && preg_match('/^[A-Z]$/', $part));
+            // Skip empty, stop words (unless series letter), and words starting with numbers
+            if ($lowerPart !== '' && ($isSeriesLetter || !in_array($lowerPart, $ignoreWords)) && !preg_match('/^\d/', $lowerPart)) {
                 // Check if word is an acronym (all uppercase, 2+ letters)
                 if (strlen($part) >= 2 && preg_match('/^[A-Z]+$/', $part)) {
                     $journalAbbr .= $lowerPart;  // Include all letters of acronym
@@ -585,11 +600,15 @@ function generateCitekey(array $fields, ?string $editingCitekey = null): string 
     }
     
     // Build citekey for journal articles
+    // Sanitize parts to remove characters illegal in citekeys (commas, spaces, etc.)
+    $sanitize = function($s) {
+        return preg_replace('/[^a-zA-Z0-9]/', '', $s);
+    };
     $parts = [];
     if ($journalAbbr) $parts[] = $journalAbbr;
-    if ($volume) $parts[] = $volume;
-    if ($pages) $parts[] = $pages;
-    if ($year) $parts[] = $year;
+    if ($volume) $parts[] = $sanitize($volume);
+    if ($pages) $parts[] = $sanitize($pages);
+    if ($year) $parts[] = $sanitize($year);
     
     // If we have journal info, use journal-based citekey
     if (!empty($parts) && $journalAbbr) {
@@ -597,18 +616,25 @@ function generateCitekey(array $fields, ?string $editingCitekey = null): string 
     }
     
     // For books/non-journal entries: use first letter of each title word
+    // Acronyms (all-uppercase like NMR) include all letters
     if ($title) {
         // Clean title: remove braces and special chars
         $cleanTitle = preg_replace('/[{}]/', '', $title);
         $titleWords = preg_split('/\s+/', $cleanTitle);
         $titleAbbr = '';
         foreach ($titleWords as $word) {
-            $word = strtolower(trim($word, '.,;:()[]'));
-            if ($word !== '' && !in_array($word, $ignoreWords)) {
+            $cleanWord = trim($word, '.,;:()[]');
+            $lowerWord = strtolower($cleanWord);
+            if ($lowerWord !== '' && !in_array($lowerWord, $ignoreWords)) {
                 // Get first letter (handle unicode)
-                $firstChar = mb_substr($word, 0, 1);
+                $firstChar = mb_substr($lowerWord, 0, 1);
                 if (preg_match('/[a-z]/i', $firstChar)) {
-                    $titleAbbr .= strtolower($firstChar);
+                    // Check if word is an acronym (all uppercase, 2+ letters)
+                    if (strlen($cleanWord) >= 2 && preg_match('/^[A-Z]+$/', $cleanWord)) {
+                        $titleAbbr .= $lowerWord;  // Include all letters of acronym
+                    } else {
+                        $titleAbbr .= strtolower($firstChar);
+                    }
                 }
             }
         }
@@ -2340,6 +2366,108 @@ function handleRequest(): void {
                 } else {
                     jsonResponse(['bibtex' => null, 'source' => null]);
                 }
+                break;
+            
+            case 'validate_bibtex':
+                // Validate BibTeX file for common errors
+                $entries = parseBibtex($bibFile);
+                $errors = [];
+                
+                foreach ($entries as $entry) {
+                    $entryErrors = [];
+                    $citekey = $entry['citekey'];
+                    
+                    foreach ($entry['fields'] as $field => $value) {
+                        // Check for unescaped special LaTeX characters
+                        // Look for & not preceded by \ and not part of &amp; etc.
+                        if (preg_match('/(?<!\\\\)&(?!amp;|lt;|gt;|nbsp;|quot;)/', $value)) {
+                            $entryErrors[] = [
+                                'field' => $field,
+                                'type' => 'unescaped_ampersand',
+                                'message' => "Unescaped '&' character",
+                                'value' => $value,
+                                'fix' => preg_replace('/(?<!\\\\)&(?!amp;|lt;|gt;|nbsp;|quot;)/', '\\&', $value)
+                            ];
+                        }
+                        
+                        // Check for unescaped % (comment character in LaTeX)
+                        if (preg_match('/(?<!\\\\)%/', $value)) {
+                            $entryErrors[] = [
+                                'field' => $field,
+                                'type' => 'unescaped_percent',
+                                'message' => "Unescaped '%' character",
+                                'value' => $value,
+                                'fix' => preg_replace('/(?<!\\\\)%/', '\\%', $value)
+                            ];
+                        }
+                        
+                        // Check for unescaped # outside of string concatenation context
+                        // In BibTeX, # is used for string concatenation, but inside field values it should be escaped
+                        if (preg_match('/(?<!\\\\)#/', $value)) {
+                            $entryErrors[] = [
+                                'field' => $field,
+                                'type' => 'unescaped_hash',
+                                'message' => "Unescaped '#' character",
+                                'value' => $value,
+                                'fix' => preg_replace('/(?<!\\\\)#/', '\\#', $value)
+                            ];
+                        }
+                    }
+                    
+                    if (!empty($entryErrors)) {
+                        $errors[] = [
+                            'citekey' => $citekey,
+                            'type' => $entry['type'],
+                            'errors' => $entryErrors
+                        ];
+                    }
+                }
+                
+                jsonResponse([
+                    'valid' => empty($errors),
+                    'errorCount' => array_sum(array_map(fn($e) => count($e['errors']), $errors)),
+                    'entriesWithErrors' => count($errors),
+                    'totalEntries' => count($entries),
+                    'errors' => $errors
+                ]);
+                break;
+            
+            case 'fix_bibtex_errors':
+                // Fix specified BibTeX errors
+                $fixes = $input['fixes'] ?? [];
+                if (empty($fixes)) {
+                    errorResponse('No fixes specified');
+                }
+                
+                $entries = parseBibtex($bibFile);
+                $fixedCount = 0;
+                
+                foreach ($fixes as $fix) {
+                    $citekey = $fix['citekey'] ?? '';
+                    $field = $fix['field'] ?? '';
+                    $newValue = $fix['value'] ?? '';
+                    
+                    if (empty($citekey) || empty($field)) continue;
+                    
+                    foreach ($entries as &$entry) {
+                        if ($entry['citekey'] === $citekey && isset($entry['fields'][$field])) {
+                            $entry['fields'][$field] = $newValue;
+                            $fixedCount++;
+                            break;
+                        }
+                    }
+                    unset($entry);
+                }
+                
+                // Save the fixed entries
+                if ($fixedCount > 0) {
+                    saveBibtex($bibFile, $entries);
+                }
+                
+                jsonResponse([
+                    'fixed' => $fixedCount,
+                    'message' => "Fixed {$fixedCount} error(s)"
+                ]);
                 break;
                 
             default:

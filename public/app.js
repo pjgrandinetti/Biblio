@@ -301,6 +301,20 @@
     }
 
     /**
+     * Escape special LaTeX characters in text (for publisher, organization, etc.)
+     * Does NOT escape {} which are often intentional in BibTeX
+     * @param {string} text - Text to escape
+     * @returns {string} Text with LaTeX special characters escaped
+     */
+    function escapeLatex(text) {
+        if (!text) return text;
+        return text
+            .replace(/&/g, '\\&')
+            .replace(/%/g, '\\%')
+            .replace(/#/g, '\\#');
+    }
+
+    /**
      * Format a list of people (authors or editors) from CrossRef/DataCite format to BibTeX format
      * @param {Array} people - Array of person objects with {family, given} or {name}
      * @returns {string} BibTeX-formatted author/editor string
@@ -943,7 +957,7 @@
                     if (pubBibtex.journal) fields.journal = lookupJournalAbbreviation(pubBibtex.journal);
                     if (pubBibtex.booktitle) fields.booktitle = pubBibtex.booktitle;
                     if (pubBibtex.series) fields.booktitle = pubBibtex.series; // ScienceDirect uses series
-                    if (pubBibtex.publisher) fields.publisher = pubBibtex.publisher;
+                    if (pubBibtex.publisher) fields.publisher = escapeLatex(pubBibtex.publisher);
                     if (pubBibtex.year) fields.year = pubBibtex.year;
                     if (pubBibtex.volume) fields.volume = pubBibtex.volume;
                     if (pubBibtex.number) fields.number = pubBibtex.number;
@@ -1052,7 +1066,7 @@
                 
                 // Publisher
                 if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'techreport' || entryType === 'inproceedings' || (useDataCite && !isArxiv))) {
-                    fields.publisher = work.publisher;
+                    fields.publisher = escapeLatex(work.publisher);
                 }
                 
                 // ISBN for books
@@ -1207,7 +1221,7 @@
             
             // Publisher
             if (work.publisher) {
-                fields.publisher = work.publisher;
+                fields.publisher = escapeLatex(work.publisher);
             }
             
             // ISBN
@@ -1652,7 +1666,14 @@
         });
         
         if (existingEntry) {
-            setStatus(elements.doiStatus, `DOI already exists: ${existingEntry.citekey}`, 'error');
+            // Show error with clickable link to existing entry
+            elements.doiStatus.className = 'status error';
+            elements.doiStatus.innerHTML = `DOI already exists: <a href="#" class="existing-entry-link">${existingEntry.citekey}</a>`;
+            elements.doiStatus.querySelector('.existing-entry-link').addEventListener('click', (e) => {
+                e.preventDefault();
+                elements.modalDoiSelect.classList.remove('active');
+                showEntryForm(existingEntry);
+            });
             return;
         }
         
@@ -1700,7 +1721,7 @@
                     if (pubBibtex.journal) entry.fields.journal = lookupJournalAbbreviation(pubBibtex.journal);
                     if (pubBibtex.booktitle) entry.fields.booktitle = pubBibtex.booktitle;
                     if (pubBibtex.series) entry.fields.booktitle = pubBibtex.series; // ScienceDirect uses series
-                    if (pubBibtex.publisher) entry.fields.publisher = pubBibtex.publisher;
+                    if (pubBibtex.publisher) entry.fields.publisher = escapeLatex(pubBibtex.publisher);
                     if (pubBibtex.year) entry.fields.year = pubBibtex.year;
                     if (pubBibtex.volume) entry.fields.volume = pubBibtex.volume;
                     if (pubBibtex.number) entry.fields.number = pubBibtex.number;
@@ -1820,7 +1841,7 @@
                 
                 // Publisher
                 if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'inproceedings' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
-                    entry.fields.publisher = work.publisher;
+                    entry.fields.publisher = escapeLatex(work.publisher);
                 }
                 
                 // ISBN for books
@@ -2636,7 +2657,7 @@
                     
                     // Publisher (useful for Zenodo, but not arXiv)
                     if (useDataCite && !isArxiv && work.publisher) {
-                        fields.publisher = work.publisher;
+                        fields.publisher = escapeLatex(work.publisher);
                     }
                     
                     // arXiv-specific fields
@@ -2775,6 +2796,33 @@
                     }
                 }
                 
+                // Check for unescaped special LaTeX characters
+                const latexFieldFixes = [];
+                for (const [field, value] of Object.entries(fields)) {
+                    if (typeof value !== 'string') continue;
+                    
+                    // Check for unescaped & (not preceded by \, not part of HTML entities)
+                    if (/(?<!\\)&(?!amp;|lt;|gt;|nbsp;|quot;)/.test(value)) {
+                        const fixed = value.replace(/(?<!\\)&(?!amp;|lt;|gt;|nbsp;|quot;)/g, '\\&');
+                        entryIssues.push(`Unescaped '&' in ${field}`);
+                        latexFieldFixes.push({ field, original: value, fixed });
+                    }
+                    
+                    // Check for unescaped % (comment character in LaTeX)
+                    if (/(?<!\\)%/.test(value)) {
+                        const fixed = value.replace(/(?<!\\)%/g, '\\%');
+                        entryIssues.push(`Unescaped '%' in ${field}`);
+                        latexFieldFixes.push({ field, original: value, fixed });
+                    }
+                    
+                    // Check for unescaped # (outside of BibTeX string context)
+                    if (/(?<!\\)#/.test(value)) {
+                        const fixed = value.replace(/(?<!\\)#/g, '\\#');
+                        entryIssues.push(`Unescaped '#' in ${field}`);
+                        latexFieldFixes.push({ field, original: value, fixed });
+                    }
+                }
+                
                 if (entryIssues.length > 0) {
                     issues.push({ 
                         citekey, 
@@ -2789,10 +2837,14 @@
                         volume: fields.volume || '',
                         pages: fields.pages || '',
                         publisher: fields.publisher || '',
-                        isbn: fields.isbn || ''
+                        isbn: fields.isbn || '',
+                        latexFixes: latexFieldFixes
                     });
                 }
             }
+            
+            // Count entries with latex fixes
+            const entriesWithLatexFixes = issues.filter(item => item.latexFixes && item.latexFixes.length > 0);
             
             // Build results HTML
             let html;
@@ -2800,6 +2852,12 @@
                 html = '<p class="success">No issues found in ' + state.entries.length + ' entries.</p>';
             } else {
                 html = '<p class="warning">Found issues in ' + issues.length + ' of ' + state.entries.length + ' entries:</p>';
+                
+                // Add "Fix All LaTeX" button if there are latex issues
+                if (entriesWithLatexFixes.length > 0) {
+                    html += '<p><button id="btn-fix-all-latex" class="btn btn-primary">Fix All LaTeX Issues (' + entriesWithLatexFixes.length + ' entries)</button></p>';
+                }
+                
                 html += '<div class="validate-issues">';
                 for (const item of issues) {
                     html += '<div class="validate-entry" data-citekey="' + escapeHtml(item.citekey) + '">';
@@ -2820,6 +2878,10 @@
                             html += ' <button class="btn btn-small btn-find-doi" data-title="' + escapeHtml(item.title) + '" data-author="' + escapeHtml(item.author) + '" data-year="' + escapeHtml(item.year) + '" data-journal="' + escapeHtml(item.journal) + '" data-volume="' + escapeHtml(item.volume) + '" data-pages="' + escapeHtml(item.pages) + '">Find DOI</button>';
                         }
                     }
+                    // Add Fix LaTeX button if there are latex character issues
+                    if (item.latexFixes && item.latexFixes.length > 0) {
+                        html += ' <button class="btn btn-small btn-fix-latex" data-citekey="' + escapeHtml(item.citekey) + '" data-fixes=\'' + escapeHtml(JSON.stringify(item.latexFixes)) + '\'>Fix LaTeX</button>';
+                    }
                     html += '</div>';
                     html += '<ul>';
                     for (const issue of item.issues) {
@@ -2834,6 +2896,61 @@
             
             elements.validateResults.innerHTML = html;
             elements.modalValidate.classList.add('active');
+            
+            // Add click handler for Fix All LaTeX button
+            const fixAllLatexBtn = elements.validateResults.querySelector('#btn-fix-all-latex');
+            if (fixAllLatexBtn) {
+                fixAllLatexBtn.addEventListener('click', async () => {
+                    fixAllLatexBtn.disabled = true;
+                    fixAllLatexBtn.textContent = 'Fixing all...';
+                    
+                    let fixedCount = 0;
+                    let errorCount = 0;
+                    
+                    for (const item of entriesWithLatexFixes) {
+                        try {
+                            const entry = state.entries.find(ent => ent.citekey === item.citekey);
+                            if (!entry) continue;
+                            
+                            // Apply all fixes for this entry
+                            for (const fix of item.latexFixes) {
+                                entry.fields[fix.field] = fix.fixed;
+                            }
+                            
+                            // Save the updated entry
+                            await apiCall('save', {
+                                entry: entry,
+                                cleanTitle: false
+                            });
+                            
+                            fixedCount++;
+                            
+                            // Update UI for this entry
+                            const entryDiv = elements.validateResults.querySelector(`.validate-entry[data-citekey="${item.citekey}"]`);
+                            if (entryDiv) {
+                                entryDiv.classList.add('fixed');
+                                const latexBtn = entryDiv.querySelector('.btn-fix-latex');
+                                if (latexBtn) {
+                                    latexBtn.textContent = 'Fixed!';
+                                    latexBtn.classList.add('btn-success');
+                                    latexBtn.disabled = true;
+                                }
+                            }
+                        } catch (error) {
+                            console.error(`Failed to fix ${item.citekey}:`, error);
+                            errorCount++;
+                        }
+                    }
+                    
+                    if (errorCount > 0) {
+                        fixAllLatexBtn.textContent = `Fixed ${fixedCount}, ${errorCount} failed`;
+                        fixAllLatexBtn.classList.add('btn-danger');
+                    } else {
+                        fixAllLatexBtn.textContent = `Fixed ${fixedCount} entries!`;
+                        fixAllLatexBtn.classList.add('btn-success');
+                    }
+                });
+            }
             
             // Add click handlers for Fix from DOI buttons
             elements.validateResults.querySelectorAll('.btn-fix-doi').forEach(btn => {
@@ -2948,7 +3065,7 @@
                         
                         // Publisher (for books, reports, inproceedings, DataCite but not arXiv)
                         if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'inproceedings' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
-                            fields.publisher = work.publisher;
+                            fields.publisher = escapeLatex(work.publisher);
                         }
                         
                         // ISBN for books
@@ -3225,7 +3342,7 @@
                                     
                                     // Publisher (for books, reports, inproceedings, DataCite but not arXiv)
                                     if (work.publisher && (entryType === 'book' || entryType === 'incollection' || entryType === 'inproceedings' || entryType === 'techreport' || (useDataCite && !isArxiv))) {
-                                        fields.publisher = work.publisher;
+                                        fields.publisher = escapeLatex(work.publisher);
                                     }
                                     
                                     // ISBN for books
@@ -3411,7 +3528,7 @@
                                     
                                     // Optionally update other fields if missing
                                     if (!entry.fields.publisher && selectedPublisher) {
-                                        entry.fields.publisher = selectedPublisher;
+                                        entry.fields.publisher = escapeLatex(selectedPublisher);
                                     }
                                     if (!entry.fields.year && selectedYear) {
                                         entry.fields.year = selectedYear;
@@ -3457,6 +3574,47 @@
                         e.target.textContent = 'Search failed';
                         e.target.classList.add('btn-danger');
                         console.error('Find ISBN search failed:', error);
+                    }
+                });
+            });
+            
+            // Add click handlers for Fix LaTeX buttons
+            elements.validateResults.querySelectorAll('.btn-fix-latex').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const citekey = e.target.dataset.citekey;
+                    const fixes = JSON.parse(e.target.dataset.fixes);
+                    const entryDiv = e.target.closest('.validate-entry');
+                    
+                    e.target.disabled = true;
+                    e.target.textContent = 'Fixing...';
+                    
+                    try {
+                        // Find the entry and apply fixes
+                        const entry = state.entries.find(ent => ent.citekey === citekey);
+                        if (!entry) {
+                            throw new Error('Entry not found');
+                        }
+                        
+                        // Apply all fixes
+                        for (const fix of fixes) {
+                            entry.fields[fix.field] = fix.fixed;
+                        }
+                        
+                        // Save the updated entry
+                        await apiCall('save', {
+                            entry: entry,
+                            cleanTitle: false
+                        });
+                        
+                        // Mark as fixed visually
+                        entryDiv.classList.add('fixed');
+                        e.target.textContent = 'Fixed!';
+                        e.target.classList.add('btn-success');
+                        
+                    } catch (error) {
+                        e.target.textContent = 'Fix failed';
+                        e.target.classList.add('btn-danger');
+                        console.error('Fix LaTeX failed:', error);
                     }
                 });
             });

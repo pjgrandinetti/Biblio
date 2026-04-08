@@ -482,6 +482,17 @@ td.cell-type {
     border: 1px solid #fecaca;
 }
 
+.status.error .existing-entry-link {
+    color: var(--primary-color);
+    text-decoration: underline;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.status.error .existing-entry-link:hover {
+    color: var(--primary-hover);
+}
+
 .status.success {
     background: #f0fdf4;
     color: var(--success-color);
@@ -498,6 +509,14 @@ td.cell-type {
     .status.error {
         background: rgba(239, 68, 68, 0.15);
         border-color: rgba(239, 68, 68, 0.3);
+    }
+
+    .status.error .existing-entry-link {
+        color: #60a5fa;
+    }
+
+    .status.error .existing-entry-link:hover {
+        color: #93c5fd;
     }
 
     .status.success {
@@ -1027,11 +1046,15 @@ body[data-entry-type="unpublished"] .field-unpublished {
     cursor: wait;
 }
 
-.btn-fix-doi.btn-success {
+.btn-fix-doi.btn-success,
+.btn-fix-latex.btn-success,
+.btn.btn-success {
     background: var(--success-color);
 }
 
-.btn-fix-doi.btn-danger {
+.btn-fix-doi.btn-danger,
+.btn-fix-latex.btn-danger,
+.btn.btn-danger {
     background: var(--danger-color);
 }
 
