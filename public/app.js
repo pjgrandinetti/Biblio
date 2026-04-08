@@ -282,10 +282,14 @@
             result = result.replace(properNamesPattern, '{$1}');
         }
         
+        // Wrap roman numerals in parentheses BEFORE all-caps pattern
+        // (oxidation states): Iron(II) -> Iron({II}), Ce(III) -> Ce({III})
+        result = result.replace(/\(([IVXLCDM]+)\)/g, '({$1})');
+        
         // Wrap fully capitalized words (2+ chars) in braces to protect case (e.g., NMR, MAS)
         result = result.replace(/(?<!\{)\b([A-Z]{2,})\b(?!\})/g, '{$1}');
         
-        // Wrap roman numerals in common contexts:
+        // Wrap roman numerals in other contexts:
         // After colon/period with space: "melts: I. A" -> "melts: {I}. A"
         result = result.replace(/([:.]\s*)([IVXLCDM]+)(\.|,|;|:|\s|$)/g, '$1{$2}$3');
         // After words like Part, Section, Volume, Chapter, Phase, Type, Figure, Table
@@ -977,7 +981,12 @@
                 if (work.page) {
                     fields.pages = work.page;
                 } else if (work['article-number']) {
-                    fields.pages = work['article-number'];
+                    // Filter out manuscript IDs like "jacs.6c01081"
+                    const artNum = work['article-number'];
+                    const isManuscriptId = /^[a-z]+\.\d+[a-z]\d+$/i.test(artNum);
+                    if (!isManuscriptId) {
+                        fields.pages = artNum;
+                    }
                 }
             }
             
@@ -987,6 +996,11 @@
             // ISSN (CrossRef only, for articles)
             if (!useDataCite && work.ISSN && work.ISSN[0] && entryType === 'article') {
                 fields.issn = work.ISSN[0];
+            }
+            
+            // Detect "in press" articles (no volume and no pages)
+            if (entryType === 'article' && !fields.volume && !fields.pages) {
+                fields.note = 'In press';
             }
             
             // Populate form fields
@@ -1052,9 +1066,9 @@
             // Build fields object
             const fields = {};
             
-            // Title
+            // Title - convert HTML to LaTeX
             if (work.title) {
-                fields.title = work.title;
+                fields.title = htmlToLatex(work.title);
             }
             
             // Authors - convert array to BibTeX format
@@ -1495,9 +1509,26 @@
         
         // Clean up DOI input (handle full URLs)
         doi = doi.replace(/^https?:\/\/(dx\.)?doi\.org\//, '');
+        // Also clean braces and whitespace
+        doi = doi.replace(/[{}\s]/g, '');
         
         if (!doi) {
             setStatus(elements.doiStatus, 'Please enter a DOI', 'error');
+            return;
+        }
+        
+        // Check if DOI already exists in database
+        const normalizedDoi = doi.toLowerCase();
+        const existingEntry = state.entries.find(e => {
+            const entryDoi = (e.fields.doi || '')
+                .toLowerCase()
+                .replace(/^https?:\/\/(dx\.)?doi\.org\//, '')
+                .replace(/[{}\s]/g, '');
+            return entryDoi === normalizedDoi;
+        });
+        
+        if (existingEntry) {
+            setStatus(elements.doiStatus, `DOI already exists: ${existingEntry.citekey}`, 'error');
             return;
         }
         
@@ -1539,25 +1570,30 @@
                 }
             } else {
                 // Fetch CrossRef and Semantic Scholar in parallel
-                const [crossrefResponse, ssTitleResult] = await Promise.all([
-                    fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`, {
-                        headers: {
-                            'Accept': 'application/json',
-                            'User-Agent': 'BibTeXManager/1.0 (mailto:user@example.com)'
-                        }
-                    }),
-                    fetchSemanticScholarTitle(doi)
-                ]);
-                ssTitle = ssTitleResult;
+                // Note: Don't set User-Agent header - browsers forbid it and some silently fail
+                let crossrefResponse;
+                try {
+                    [crossrefResponse, ssTitle] = await Promise.all([
+                        fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`),
+                        fetchSemanticScholarTitle(doi)
+                    ]);
+                } catch (networkError) {
+                    // Network-level failure (blocked, CORS, offline, etc.)
+                    console.error('Network error fetching DOI:', networkError);
+                    throw new Error('Network error - check your internet connection or try again');
+                }
                 
                 if (!crossrefResponse.ok) {
                     if (crossrefResponse.status === 404) {
-                        throw new Error('DOI not found');
+                        throw new Error('DOI not found in CrossRef');
                     }
-                    throw new Error('Failed to fetch DOI metadata');
+                    throw new Error(`CrossRef returned ${crossrefResponse.status}: ${crossrefResponse.statusText}`);
                 }
                 
                 const data = await crossrefResponse.json();
+                if (!data || !data.message) {
+                    throw new Error('Invalid response from CrossRef');
+                }
                 work = data.message;
             }
             
@@ -1585,9 +1621,9 @@
                 entry.fields.editor = formatPersonList(work.editor);
             }
             
-            // Title - pick best between CrossRef and Semantic Scholar
+            // Title - pick best between CrossRef and Semantic Scholar, convert to LaTeX
             if (work.title && work.title[0]) {
-                entry.fields.title = pickBetterTitle(work.title[0], ssTitle);
+                entry.fields.title = htmlToLatex(pickBetterTitle(work.title[0], ssTitle));
             }
             
             // Journal - prefer abbreviated name, with fallback to abbreviation database (for articles only)
@@ -1655,7 +1691,13 @@
                 if (work.page) {
                     entry.fields.pages = work.page;
                 } else if (work['article-number']) {
-                    entry.fields.pages = work['article-number'];
+                    // Filter out manuscript IDs like "jacs.6c01081" - these look like DOI suffixes
+                    // Real article numbers are numeric, start with letter+digits, or are simple IDs
+                    const artNum = work['article-number'];
+                    const isManuscriptId = /^[a-z]+\.\d+[a-z]\d+$/i.test(artNum);
+                    if (!isManuscriptId) {
+                        entry.fields.pages = artNum;
+                    }
                 }
             }
             
@@ -1672,6 +1714,11 @@
             // ISSN (CrossRef only, for articles)
             if (!useDataCite && work.ISSN && work.ISSN[0] && entryType === 'article') {
                 entry.fields.issn = work.ISSN[0];
+            }
+            
+            // Detect "in press" articles (no volume and no pages)
+            if (entryType === 'article' && !entry.fields.volume && !entry.fields.pages) {
+                entry.fields.note = 'In press';
             }
             
             // Generate citekey
@@ -2369,7 +2416,12 @@
                         if (work.page) {
                             fields.pages = work.page;
                         } else if (work['article-number']) {
-                            fields.pages = work['article-number'];
+                            // Filter out manuscript IDs like "jacs.6c01081"
+                            const artNum = work['article-number'];
+                            const isManuscriptId = /^[a-z]+\.\d+[a-z]\d+$/i.test(artNum);
+                            if (!isManuscriptId) {
+                                fields.pages = artNum;
+                            }
                         }
                     }
                     
@@ -2394,11 +2446,17 @@
                         fields.archiveprefix = 'arXiv';
                     }
                     
+                    // Detect "in press" articles (no volume and no pages)
+                    const refreshEntryType = isArxiv ? 'article' : (useDataCite ? 'misc' : entry.type);
+                    if (refreshEntryType === 'article' && !fields.volume && !fields.pages) {
+                        fields.note = 'In press';
+                    }
+                    
                     // Save the updated entry
                     await apiCall('save', {
                         entry: {
                             citekey: originalCitekey,
-                            type: isArxiv ? 'article' : (useDataCite ? 'misc' : entry.type),
+                            type: refreshEntryType,
                             fields: fields
                         },
                         originalCitekey: originalCitekey,
@@ -2660,7 +2718,12 @@
                             if (work.page) {
                                 fields.pages = work.page;
                             } else if (work['article-number']) {
-                                fields.pages = work['article-number'];
+                                // Filter out manuscript IDs like "jacs.6c01081"
+                                const artNum = work['article-number'];
+                                const isManuscriptId = /^[a-z]+\.\d+[a-z]\d+$/i.test(artNum);
+                                if (!isManuscriptId) {
+                                    fields.pages = artNum;
+                                }
                             }
                         }
                         
@@ -2686,6 +2749,11 @@
                         // Edition for books
                         if (work.edition && (entryType === 'book' || entryType === 'incollection')) {
                             fields.edition = work.edition;
+                        }
+                        
+                        // Detect "in press" articles (no volume and no pages)
+                        if (entryType === 'article' && !fields.volume && !fields.pages) {
+                            fields.note = 'In press';
                         }
                         
                         // Generate citekey
@@ -2920,7 +2988,12 @@
                                         if (work.page) {
                                             fields.pages = work.page;
                                         } else if (work['article-number']) {
-                                            fields.pages = work['article-number'];
+                                            // Filter out manuscript IDs like "jacs.6c01081"
+                                            const artNum = work['article-number'];
+                                            const isManuscriptId = /^[a-z]+\.\d+[a-z]\d+$/i.test(artNum);
+                                            if (!isManuscriptId) {
+                                                fields.pages = artNum;
+                                            }
                                         }
                                     }
                                     
@@ -2944,6 +3017,11 @@
                                     // Edition for books
                                     if (work.edition && (entryType === 'book' || entryType === 'incollection')) {
                                         fields.edition = work.edition;
+                                    }
+                                    
+                                    // Detect "in press" articles (no volume and no pages)
+                                    if (entryType === 'article' && !fields.volume && !fields.pages) {
+                                        fields.note = 'In press';
                                     }
                                     
                                     // Generate citekey

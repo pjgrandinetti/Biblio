@@ -348,7 +348,17 @@ function generateCitekey(array $fields, ?string $editingCitekey = null): string 
     
     $journal = $fields['journal'] ?? '';
     $volume = $fields['volume'] ?? '';
-    $pages = $fields['pages'] ?? ($fields['article-number'] ?? '');
+    $pages = $fields['pages'] ?? '';
+    
+    // Try article-number as fallback, but filter out manuscript IDs like "jacs.6c01081"
+    if (empty($pages) && isset($fields['article-number'])) {
+        $artNum = $fields['article-number'];
+        // Manuscript IDs look like "jacs.6c01081" - lowercase letters, dot, digits, letter, digits
+        if (!preg_match('/^[a-z]+\.\d+[a-z]\d+$/i', $artNum)) {
+            $pages = $artNum;
+        }
+    }
+    
     $year = $fields['year'] ?? '';
     $title = $fields['title'] ?? '';
     
@@ -371,6 +381,40 @@ function generateCitekey(array $fields, ?string $editingCitekey = null): string 
         }
     }
     $journalAbbr = strtolower($journalAbbr);
+    
+    // Check for "in press" articles (journal but no volume and no pages)
+    if ($journalAbbr && empty($volume) && empty($pages) && $year) {
+        // Extract first author's last name
+        $author = $fields['author'] ?? '';
+        if (empty($author)) {
+            $author = $fields['editor'] ?? '';
+        }
+        $firstAuthorLastName = '';
+        if ($author) {
+            $firstAuthor = preg_split('/\s+and\s+/i', $author)[0];
+            if (strpos($firstAuthor, ',') !== false) {
+                $firstAuthorLastName = trim(explode(',', $firstAuthor)[0]);
+            } else {
+                $nameParts = preg_split('/\s+/', trim($firstAuthor));
+                $firstAuthorLastName = end($nameParts);
+            }
+            // Clean: keep only letters, preserve case for readability
+            $firstAuthorLastName = preg_replace('/[^a-zA-Z]/', '', $firstAuthorLastName);
+        }
+        
+        if ($firstAuthorLastName) {
+            $citekey = $journalAbbr . '_' . $firstAuthorLastName . '_inpress_' . $year;
+        } else {
+            $citekey = $journalAbbr . '_inpress_' . $year;
+        }
+        
+        // Check uniqueness and add suffix if needed
+        $existingKeys = getExistingCitekeys($editingCitekey);
+        if (!isset($existingKeys[$citekey])) {
+            return $citekey;
+        }
+        return addLetterSuffix($citekey, $existingKeys);
+    }
     
     // Build citekey for journal articles
     $parts = [];
@@ -702,16 +746,19 @@ function cleanTitle(string $title): string {
         $title = preg_replace($properNamesPattern, '{$1}', $title);
     }
     
-    // Wrap fully capitalized words (2+ chars) in braces if not already
-    $title = preg_replace_callback('/(?<!\{)\b([A-Z]{2,})\b(?!\})/', function($m) {
-        return '{' . $m[1] . '}';
-    }, $title);
-    
     // Wrap roman numerals in common contexts (for single-letter numerals like I, V, X)
+    // MUST run BEFORE all-caps pattern to handle (II) correctly
+    // In parentheses (oxidation states): Iron(II) -> Iron({II}), Ce(III) -> Ce({III})
+    $title = preg_replace('/\(([IVXLCDM]+)\)/', '({$1})', $title);
     // After colon or period with space
     $title = preg_replace('/([:.]\s*)([IVXLCDM]+)([\.,;:\s]|$)/', '$1{$2}$3', $title);
     // After words like Part, Section, Volume, Chapter, Phase, Type, Figure, Table
     $title = preg_replace('/\b(Part|Section|Volume|Chapter|Phase|Type|Figure|Table|Fig|Tab|No|Nr)\s+([IVXLCDM]+)\b/i', '$1 {$2}', $title);
+    
+    // Wrap fully capitalized words (2+ chars) in braces if not already
+    $title = preg_replace_callback('/(?<!\{)\b([A-Z]{2,})\b(?!\})/', function($m) {
+        return '{' . $m[1] . '}';
+    }, $title);
     
     return $title;
 }

@@ -79,6 +79,10 @@ Then open http://localhost:8000
 - Metadata-only (no PDF attachments)
 - Upstream data quality varies—manual review recommended for critical entries
 
+## Development
+
+This project was "vibe coded" with AI assistance (GitHub Copilot / Claude).
+
 ## License
 
 MIT
