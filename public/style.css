@@ -386,6 +386,7 @@ td.cell-type {
     padding: 2rem;
     max-width: 700px;
     margin: 0 auto;
+    color: var(--text-color);
 }
 
 .lookup-form h2,
@@ -393,6 +394,7 @@ td.cell-type {
 .entry-form h2 {
     margin-bottom: 1.5rem;
     font-size: 1.25rem;
+    color: var(--text-color);
 }
 
 .form-header {
@@ -687,6 +689,7 @@ body[data-entry-type="unpublished"] .field-unpublished {
     border-radius: var(--border-radius);
     margin-bottom: 0.5rem;
     font-size: 0.875rem;
+    color: var(--text-color);
 }
 
 .entry-preview .citekey {
@@ -700,6 +703,7 @@ body[data-entry-type="unpublished"] .field-unpublished {
     border-radius: var(--border-radius);
     padding: 1rem;
     margin-bottom: 1rem;
+    color: var(--text-color);
 }
 
 .conflict-choice {
@@ -733,10 +737,12 @@ body[data-entry-type="unpublished"] .field-unpublished {
     box-shadow: var(--shadow-md);
     max-width: 400px;
     width: 90%;
+    color: var(--text-color);
 }
 
 .modal-content h3 {
     margin-bottom: 1rem;
+    color: var(--text-color);
 }
 
 .modal-content p {
@@ -770,6 +776,7 @@ body[data-entry-type="unpublished"] .field-unpublished {
     border-radius: var(--border-radius);
     border-left: 3px solid var(--warning-color);
     margin-bottom: 1.5rem;
+    color: var(--text-color);
 }
 
 .modal-locked {
@@ -783,6 +790,7 @@ body[data-entry-type="unpublished"] .field-unpublished {
     border-radius: var(--border-radius);
     border-left: 3px solid var(--danger-color);
     margin-bottom: 1.5rem;
+    color: var(--text-color);
 }
 
 /* Validation modal */
@@ -813,6 +821,7 @@ body[data-entry-type="unpublished"] .field-unpublished {
 .validate-entry {
     padding: 0.5rem;
     border-bottom: 1px solid var(--border-color);
+    color: var(--text-color);
 }
 
 .validate-entry:last-child {
@@ -1024,6 +1033,11 @@ body[data-entry-type="unpublished"] .field-unpublished {
 .doi-results-list p {
     margin-bottom: 0.5rem;
     font-size: 0.9em;
+    color: var(--text-color);
+}
+
+.doi-results-list p strong {
+    color: var(--text-color);
 }
 
 .doi-result-item {
@@ -1045,6 +1059,7 @@ body[data-entry-type="unpublished"] .field-unpublished {
     font-weight: 500;
     font-size: 0.9em;
     margin-bottom: 0.25rem;
+    color: var(--text-color);
 }
 
 .doi-result-meta {
@@ -1075,22 +1090,29 @@ body[data-entry-type="unpublished"] .field-unpublished {
 
 /* Existing entry info for comparison */
 .existing-entry-info {
-    background: #fff3cd;
-    border: 1px solid #ffc107;
+    background: var(--card-bg);
+    border: 2px solid var(--warning-color);
     border-radius: 4px;
     padding: 0.5rem;
     margin-bottom: 0.75rem;
+    color: var(--text-color);
 }
 
 .existing-entry-info p {
     margin-bottom: 0.25rem;
     font-size: 0.85em;
+    color: var(--text-color);
+}
+
+.existing-entry-info p strong {
+    color: var(--warning-color);
 }
 
 .existing-title {
     font-weight: 500;
     font-size: 0.9em;
     margin-bottom: 0.25rem;
+    color: var(--text-color);
 }
 
 .existing-meta {
@@ -1101,11 +1123,11 @@ body[data-entry-type="unpublished"] .field-unpublished {
 /* Year match highlighting */
 .doi-result-item.year-match {
     border-color: var(--success-color);
-    background: #f0fff4;
+    background: rgba(34, 197, 94, 0.1);
 }
 
 .doi-result-item.year-match:hover {
-    background: #dcfce7;
+    background: rgba(34, 197, 94, 0.15);
 }
 
 /* Loading overlay */
@@ -1115,7 +1137,7 @@ body[data-entry-type="unpublished"] .field-unpublished {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(255, 255, 255, 0.8);
+    background: rgba(0, 0, 0, 0.7);
     z-index: 2000;
     display: flex;
     align-items: center;
@@ -1127,6 +1149,10 @@ body[data-entry-type="unpublished"] .field-unpublished {
     flex-direction: column;
     align-items: center;
     gap: 1rem;
+    background: var(--card-bg);
+    padding: 2rem;
+    border-radius: var(--border-radius);
+    color: var(--text-color);
 }
 
 .spinner {
@@ -1146,7 +1172,7 @@ body[data-entry-type="unpublished"] .field-unpublished {
 .progress-text {
     margin-bottom: 0.5rem;
     font-size: 0.9rem;
-    color: var(--text-secondary);
+    color: var(--text-muted);
 }
 
 .progress-bar {
