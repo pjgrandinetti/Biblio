@@ -311,6 +311,138 @@ class BibTeXParser {
 }
 
 /**
+ * Normalize a title for comparison (deduplication)
+ */
+function normalizeTitle(string $title): string {
+    // Remove LaTeX braces and commands
+    $title = preg_replace('/[{}$\\\\]/', '', $title);
+    $title = preg_replace('/\\\\[a-zA-Z]+/', '', $title);
+    // Lowercase
+    $title = strtolower($title);
+    // Normalize whitespace
+    $title = preg_replace('/\s+/', ' ', $title);
+    $title = trim($title);
+    // Remove punctuation
+    $title = preg_replace('/[.,;:!?\'"()\\[\\]-]/', '', $title);
+    return $title;
+}
+
+/**
+ * Generate citation key for an existing entry (for deduplication)
+ * This version does NOT check for uniqueness - used when regenerating all keys
+ */
+function generateCitekeyForEntry(array $entry): string {
+    $fields = $entry['fields'] ?? [];
+    
+    // Check for arXiv entry
+    $archiveprefix = $fields['archiveprefix'] ?? '';
+    $eprint = $fields['eprint'] ?? '';
+    $doi = $fields['doi'] ?? '';
+    $arxivId = null;
+    
+    if (preg_match('/^10\.48550\/arXiv\.(\d{4}\.\d{4,5})/i', $doi, $matches)) {
+        $arxivId = $matches[1];
+    } elseif (strtolower($archiveprefix) === 'arxiv' || preg_match('/^arXiv:/i', $eprint)) {
+        $arxivId = preg_replace('/^arXiv:/i', '', $eprint);
+    } elseif (preg_match('/^(\d{4}\.\d{4,5})(v\d+)?$/', $eprint, $matches)) {
+        $arxivId = $matches[1];
+    }
+    
+    if ($arxivId) {
+        $cleanId = str_replace('.', '_', $arxivId);
+        return 'arxiv_' . $cleanId;
+    }
+    
+    // Check for Zenodo
+    if (preg_match('/^10\.5281\/zenodo\.(\d+)$/i', $doi, $matches)) {
+        $zenodoId = $matches[1];
+        $year = $fields['year'] ?? date('Y');
+        return 'zenodo_' . $zenodoId . '_' . $year;
+    }
+    
+    $journal = $fields['journal'] ?? '';
+    $volume = $fields['volume'] ?? '';
+    $pages = $fields['pages'] ?? '';
+    
+    if (empty($pages) && isset($fields['article-number'])) {
+        $artNum = $fields['article-number'];
+        if (!preg_match('/^[a-z]+\.\d+[a-z]\d+$/i', $artNum)) {
+            $pages = $artNum;
+        }
+    }
+    
+    $year = $fields['year'] ?? '';
+    $title = $fields['title'] ?? '';
+    
+    // Extract first page
+    if (strpos($pages, '-') !== false || strpos($pages, '--') !== false) {
+        $pages = preg_split('/[-–—]+/', $pages)[0];
+    }
+    $pages = trim($pages);
+    
+    $ignoreWords = ['the', 'of', 'and', 'for', 'in', 'on', 'a', 'an', 'to', 'with'];
+    
+    // Generate journal abbreviation
+    $words = preg_split('/\s+/', $journal);
+    $journalAbbr = '';
+    foreach ($words as $word) {
+        $word = strtolower(trim($word, '.,;:'));
+        if ($word !== '' && !in_array($word, $ignoreWords)) {
+            $journalAbbr .= $word[0];
+        }
+    }
+    $journalAbbr = strtolower($journalAbbr);
+    
+    // Build citekey for journal articles
+    $parts = [];
+    if ($journalAbbr) $parts[] = $journalAbbr;
+    if ($volume) $parts[] = $volume;
+    if ($pages) $parts[] = $pages;
+    if ($year) $parts[] = $year;
+    
+    if (!empty($parts) && $journalAbbr) {
+        return implode('_', $parts);
+    }
+    
+    // For books/non-journal entries: use first letter of each title word
+    if ($title) {
+        $cleanTitle = preg_replace('/[{}]/', '', $title);
+        $titleWords = preg_split('/\s+/', $cleanTitle);
+        $titleAbbr = '';
+        foreach ($titleWords as $word) {
+            $word = strtolower(trim($word, '.,;:()[]'));
+            if ($word !== '' && !in_array($word, $ignoreWords)) {
+                $firstChar = mb_substr($word, 0, 1);
+                if (preg_match('/[a-z]/i', $firstChar)) {
+                    $titleAbbr .= strtolower($firstChar);
+                }
+            }
+        }
+        
+        if ($titleAbbr) {
+            return $titleAbbr;
+        }
+    }
+    
+    // Fallback: author + year
+    $author = $fields['author'] ?? '';
+    if (empty($author)) {
+        $author = $fields['editor'] ?? 'unknown';
+    }
+    $firstAuthor = preg_split('/\s+and\s+/i', $author)[0];
+    if (strpos($firstAuthor, ',') !== false) {
+        $lastName = trim(explode(',', $firstAuthor)[0]);
+    } else {
+        $nameParts = preg_split('/\s+/', trim($firstAuthor));
+        $lastName = end($nameParts);
+    }
+    $lastName = preg_replace('/[^a-zA-Z]/', '', $lastName);
+    $lastName = strtolower($lastName) ?: 'unknown';
+    
+    return $lastName . ($year ?: date('Y'));
+}
+
+/**
  * Generate citation key from entry fields
  * Format: journalabbr_volume_page_year
  */
@@ -1101,20 +1233,75 @@ function handleRequest(): void {
                 $importedEntries = BibTeXParser::parse($uploadedContent);
                 $existingEntries = readBibFile();
                 
-                // Build lookup for existing entries
+                // Build lookups for existing entries
                 $existingByKey = [];
+                $existingByDoi = [];
+                $existingByTitle = [];
+                
                 foreach ($existingEntries as $entry) {
                     $existingByKey[$entry['citekey']] = $entry;
+                    
+                    // Index by DOI
+                    if (!empty($entry['fields']['doi'])) {
+                        $normalizedDoi = strtolower(trim($entry['fields']['doi']));
+                        $normalizedDoi = preg_replace('/^https?:\/\/(dx\.)?doi\.org\//', '', $normalizedDoi);
+                        $existingByDoi[$normalizedDoi] = $entry;
+                    }
+                    
+                    // Index by normalized title
+                    if (!empty($entry['fields']['title'])) {
+                        $normalizedTitle = normalizeTitle($entry['fields']['title']);
+                        if (strlen($normalizedTitle) > 10) {
+                            $existingByTitle[$normalizedTitle] = $entry;
+                        }
+                    }
                 }
                 
                 $results = [
                     'new' => [],
                     'duplicates' => [],
-                    'conflicts' => []
+                    'conflicts' => [],
+                    'contentDuplicates' => []  // Same content but different citekey
                 ];
                 
                 foreach ($importedEntries as $imported) {
                     $key = $imported['citekey'];
+                    $importedDoi = '';
+                    $importedTitle = '';
+                    
+                    // Normalize imported DOI
+                    if (!empty($imported['fields']['doi'])) {
+                        $importedDoi = strtolower(trim($imported['fields']['doi']));
+                        $importedDoi = preg_replace('/^https?:\/\/(dx\.)?doi\.org\//', '', $importedDoi);
+                    }
+                    
+                    // Normalize imported title
+                    if (!empty($imported['fields']['title'])) {
+                        $importedTitle = normalizeTitle($imported['fields']['title']);
+                    }
+                    
+                    // Check for content duplicates (same DOI or same title)
+                    $existingMatch = null;
+                    $matchType = '';
+                    
+                    if ($importedDoi && isset($existingByDoi[$importedDoi])) {
+                        $existingMatch = $existingByDoi[$importedDoi];
+                        $matchType = 'DOI';
+                    } elseif ($importedTitle && strlen($importedTitle) > 10 && isset($existingByTitle[$importedTitle])) {
+                        $existingMatch = $existingByTitle[$importedTitle];
+                        $matchType = 'title';
+                    }
+                    
+                    if ($existingMatch && $existingMatch['citekey'] !== $key) {
+                        // Content duplicate with different citekey - skip it
+                        $results['contentDuplicates'][] = [
+                            'importedKey' => $key,
+                            'existingKey' => $existingMatch['citekey'],
+                            'matchType' => $matchType,
+                            'title' => $imported['fields']['title'] ?? ''
+                        ];
+                        continue;
+                    }
                     
                     if (!isset($existingByKey[$key])) {
                         // New entry
@@ -1140,8 +1327,10 @@ function handleRequest(): void {
                     'newCount' => count($results['new']),
                     'duplicateCount' => count($results['duplicates']),
                     'conflictCount' => count($results['conflicts']),
+                    'contentDuplicateCount' => count($results['contentDuplicates']),
                     'new' => $results['new'],
-                    'conflicts' => $results['conflicts']
+                    'conflicts' => $results['conflicts'],
+                    'contentDuplicates' => $results['contentDuplicates']
                 ]);
                 break;
                 
@@ -1932,6 +2121,94 @@ function handleRequest(): void {
                 }
                 
                 jsonResponse(['work' => $work, 'isbn' => $cleanIsbn]);
+                break;
+            
+            case 'deduplicate_rekey':
+                // Regenerate all citekeys and remove duplicates
+                $entries = readBibFile();
+                $rekeyed = 0;
+                $removedEntries = [];
+                
+                // Step 1: Generate new citekeys for all entries
+                $rekeyedEntries = [];
+                foreach ($entries as $entry) {
+                    $oldKey = $entry['citekey'];
+                    $newKey = generateCitekeyForEntry($entry);
+                    
+                    if ($newKey !== $oldKey) {
+                        $rekeyed++;
+                    }
+                    
+                    $rekeyedEntries[] = [
+                        'entry' => $entry,
+                        'oldKey' => $oldKey,
+                        'newKey' => $newKey,
+                        'hasDoi' => !empty($entry['fields']['doi']),
+                        'hasIssn' => !empty($entry['fields']['issn']),
+                        'fieldCount' => count($entry['fields'])
+                    ];
+                }
+                
+                // Step 2: Group by new citekey and resolve conflicts
+                $keyGroups = [];
+                foreach ($rekeyedEntries as $item) {
+                    $key = $item['newKey'];
+                    if (!isset($keyGroups[$key])) {
+                        $keyGroups[$key] = [];
+                    }
+                    $keyGroups[$key][] = $item;
+                }
+                
+                // Step 3: For each group, keep the best entry (one with DOI, most fields)
+                $finalEntries = [];
+                foreach ($keyGroups as $newKey => $group) {
+                    if (count($group) === 1) {
+                        // No conflict - just update citekey
+                        $item = $group[0];
+                        $entry = $item['entry'];
+                        $entry['citekey'] = $newKey;
+                        $finalEntries[] = $entry;
+                    } else {
+                        // Conflict - sort by priority: hasDoi, hasIssn, fieldCount
+                        usort($group, function($a, $b) {
+                            // Prefer entries with DOI
+                            if ($a['hasDoi'] !== $b['hasDoi']) {
+                                return $b['hasDoi'] - $a['hasDoi'];
+                            }
+                            // Then prefer entries with ISSN
+                            if ($a['hasIssn'] !== $b['hasIssn']) {
+                                return $b['hasIssn'] - $a['hasIssn'];
+                            }
+                            // Then prefer entries with more fields
+                            return $b['fieldCount'] - $a['fieldCount'];
+                        });
+                        
+                        // Keep the first (best) entry
+                        $best = $group[0];
+                        $entry = $best['entry'];
+                        $entry['citekey'] = $newKey;
+                        $finalEntries[] = $entry;
+                        
+                        // Record removed entries
+                        for ($i = 1; $i < count($group); $i++) {
+                            $removedEntries[] = [
+                                'oldKey' => $group[$i]['oldKey'],
+                                'newKey' => $newKey,
+                                'hasDoi' => $group[$i]['hasDoi']
+                            ];
+                        }
+                    }
+                }
+                
+                // Write the deduplicated entries
+                writeBibFile($finalEntries);
+                
+                jsonResponse([
+                    'rekeyed' => $rekeyed,
+                    'duplicatesRemoved' => count($removedEntries),
+                    'totalRemaining' => count($finalEntries),
+                    'removedEntries' => $removedEntries
+                ]);
                 break;
                 
             default:

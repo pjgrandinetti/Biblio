@@ -53,6 +53,7 @@
         btnCleanTitles: document.getElementById('btn-clean-titles'),
         btnRefreshAllDois: document.getElementById('btn-refresh-all-dois'),
         btnValidate: document.getElementById('btn-validate'),
+        btnDeduplicate: document.getElementById('btn-deduplicate'),
         
         // List view
         searchInput: document.getElementById('search-input'),
@@ -1868,7 +1869,7 @@
             
             // Update preview
             elements.importNewCount.textContent = result.newCount;
-            elements.importDupCount.textContent = result.duplicateCount;
+            elements.importDupCount.textContent = result.duplicateCount + (result.contentDuplicateCount || 0);
             elements.importConflictCount.textContent = result.conflictCount;
             
             // Show new entries
@@ -1885,6 +1886,30 @@
                 `).join('');
             } else {
                 elements.newEntriesContainer.innerHTML = '<p class="hint">No new entries to import.</p>';
+            }
+            
+            // Show content duplicates info (same DOI/title but different citekey)
+            if (result.contentDuplicates && result.contentDuplicates.length > 0) {
+                let contentDupHtml = `<div class="content-duplicates-info">
+                    <p class="hint"><strong>${result.contentDuplicates.length} entries skipped</strong> - already exist with different citekeys:</p>
+                    <div class="content-duplicates-list">`;
+                
+                const maxShow = Math.min(result.contentDuplicates.length, 10);
+                for (let i = 0; i < maxShow; i++) {
+                    const dup = result.contentDuplicates[i];
+                    contentDupHtml += `<div class="entry-preview">
+                        <span class="citekey">${escapeHtml(dup.importedKey)}</span> → existing: <span class="citekey">${escapeHtml(dup.existingKey)}</span>
+                        <small>(matched by ${dup.matchType})</small>
+                        <br><small>${escapeHtml(truncate(dup.title, 60))}</small>
+                    </div>`;
+                }
+                
+                if (result.contentDuplicates.length > maxShow) {
+                    contentDupHtml += `<p class="hint">...and ${result.contentDuplicates.length - maxShow} more</p>`;
+                }
+                
+                contentDupHtml += '</div></div>';
+                elements.newEntriesContainer.innerHTML += contentDupHtml;
             }
             
             // Show conflicts
@@ -3248,6 +3273,43 @@
             // Reload entries if any fixes were made
             if (elements.validateResults.querySelector('.fixed')) {
                 await loadEntries();
+            }
+        });
+
+        // Deduplicate & Rekey
+        elements.btnDeduplicate.addEventListener('click', async () => {
+            elements.toolsMenu.classList.remove('show');
+            
+            if (!confirm('This will:\n1. Regenerate citekeys for all entries using the standard format\n2. Remove duplicate entries (keeping the one with a DOI)\n\nThis operation cannot be undone. Continue?')) {
+                return;
+            }
+            
+            showLoading('Regenerating citekeys and removing duplicates...');
+            
+            try {
+                const result = await apiCall('deduplicate_rekey', {});
+                hideLoading();
+                
+                let message = `Deduplicate & Rekey complete:\n`;
+                message += `- ${result.rekeyed} entries rekeyed\n`;
+                message += `- ${result.duplicatesRemoved} duplicates removed\n`;
+                message += `- ${result.totalRemaining} entries remaining`;
+                
+                if (result.removedEntries && result.removedEntries.length > 0) {
+                    message += `\n\nRemoved entries (first 20):`;
+                    for (const removed of result.removedEntries.slice(0, 20)) {
+                        message += `\n  ${removed.oldKey} → ${removed.newKey} (kept entry with DOI)`;
+                    }
+                    if (result.removedEntries.length > 20) {
+                        message += `\n  ...and ${result.removedEntries.length - 20} more`;
+                    }
+                }
+                
+                alert(message);
+                await loadEntries();
+            } catch (error) {
+                hideLoading();
+                alert('Deduplicate failed: ' + error.message);
             }
         });
         

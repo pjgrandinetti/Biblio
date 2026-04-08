@@ -712,6 +712,25 @@ body[data-entry-type="unpublished"] .field-unpublished {
     margin-top: 0.5rem;
 }
 
+/* Content duplicates info (import) */
+.content-duplicates-info {
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background: var(--bg-color);
+    border-radius: var(--border-radius);
+    border: 1px dashed var(--border-color);
+}
+
+.content-duplicates-info p.hint {
+    margin-bottom: 0.75rem;
+}
+
+.content-duplicates-list .entry-preview {
+    padding: 0.5rem;
+    margin-bottom: 0.25rem;
+    font-size: 0.8rem;
+}
+
 /* Modal */
 .modal {
     display: none;
