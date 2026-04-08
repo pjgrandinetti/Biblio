@@ -84,6 +84,7 @@
         btnRefreshFromDoi: document.getElementById('btn-refresh-from-doi'),
         btnRefreshFromIsbn: document.getElementById('btn-refresh-from-isbn'),
         btnFindDoi: document.getElementById('btn-find-doi'),
+        btnFindIsbn: document.getElementById('btn-find-isbn'),
         btnSaveEntry: document.getElementById('btn-save-entry'),
         btnCancelEntry: document.getElementById('btn-cancel-entry'),
         btnDeleteEntry: document.getElementById('btn-delete-entry'),
@@ -726,6 +727,11 @@
         
         // Hide Find DOI button if DOI already exists
         elements.btnFindDoi.style.display = hasDoi ? 'none' : 'inline-flex';
+        
+        // Hide Find ISBN button if ISBN already exists
+        const isbnField = document.getElementById('entry-isbn');
+        const hasIsbn = isbnField.value.trim() !== '';
+        elements.btnFindIsbn.style.display = hasIsbn ? 'none' : 'inline-flex';
         
         clearStatus(elements.formStatus);
         showView('view-form');
@@ -3279,10 +3285,24 @@
             }
         });
         
+        // Hide Find ISBN button when ISBN is present
+        const isbnField = document.getElementById('entry-isbn');
+        isbnField.addEventListener('input', () => {
+            const hasIsbn = isbnField.value.trim() !== '';
+            elements.btnFindIsbn.style.display = hasIsbn ? 'none' : 'inline-flex';
+        });
+        
         elements.btnGenerateCitekey.addEventListener('click', generateCitekey);
         elements.btnRefreshFromDoi.addEventListener('click', refreshFromDoi);
         elements.btnRefreshFromIsbn.addEventListener('click', refreshFromIsbn);
         elements.btnFindDoi.addEventListener('click', findDoiForEntry);
+        elements.btnFindIsbn.addEventListener('click', () => {
+            const title = document.getElementById('entry-title').value.trim();
+            const author = document.getElementById('entry-author').value.trim();
+            const publisher = document.getElementById('entry-publisher')?.value?.trim() || '';
+            const year = document.getElementById('entry-year').value.trim();
+            findIsbnForEntry(title, author, publisher, year);
+        });
         elements.btnSaveEntry.addEventListener('click', saveEntry);
         elements.btnCancelEntry.addEventListener('click', () => {
             state.editingCitekey = null;
