@@ -360,6 +360,47 @@ function generateCitekeyForEntry(array $entry): string {
         return 'zenodo_' . $zenodoId . '_' . $year;
     }
     
+    // Check for software entries (detect by title patterns with version/revision)
+    $title = $fields['title'] ?? '';
+    $journal = $fields['journal'] ?? '';
+    $booktitle = $fields['booktitle'] ?? '';
+    $entryType = strtolower($entry['type'] ?? '');
+    
+    // Software detection: entries without journal/booktitle that have version patterns in title
+    // Pattern matches: "Name XX (Revision Y.Z)", "Name~XX Revision Y.Z", "Name Version X.Y", etc.
+    if (empty($journal) && empty($booktitle)) {
+        // Clean title for analysis (remove braces, tildes, etc.)
+        $cleanTitle = preg_replace('/[{}~\\\\]/', ' ', $title);
+        $cleanTitle = preg_replace('/\s+/', ' ', trim($cleanTitle));
+        
+        // Pattern: Software name followed by version number and optional revision
+        // Examples: "Gaussian 98 (Revision A.7)", "Gaussian 16 Revision C.01", "MATLAB R2023a"
+        if (preg_match('/^(.+?)\s*(\d+)\s*[\(\s]*(?:Revision|Rev\.?|Version|Ver\.?|Release|R)\s*([A-Za-z]?\d*\.?\d*[a-z]?)/i', $cleanTitle, $matches)) {
+            $softwareName = preg_replace('/[^a-z0-9]/', '', strtolower(trim($matches[1])));
+            $majorVersion = $matches[2];
+            $revision = preg_replace('/[^a-z0-9]/', '', strtolower($matches[3]));
+            
+            if ($softwareName && $majorVersion) {
+                $key = $softwareName . '_' . $majorVersion;
+                if ($revision) {
+                    $key .= '_' . $revision;
+                }
+                return $key;
+            }
+        }
+        
+        // Simpler pattern: "Name Version" or "Name vX.Y" without explicit Revision keyword
+        // Examples: "Python 3.12", "NumPy 1.24.0"
+        if (preg_match('/^(.+?)\s+v?(\d+(?:\.\d+)*[a-z]?)$/i', $cleanTitle, $matches)) {
+            $softwareName = preg_replace('/[^a-z0-9]/', '', strtolower(trim($matches[1])));
+            $version = preg_replace('/[^a-z0-9]/', '', strtolower($matches[2]));
+            
+            if ($softwareName && $version) {
+                return $softwareName . '_' . $version;
+            }
+        }
+    }
+    
     $journal = $fields['journal'] ?? '';
     $booktitle = $fields['booktitle'] ?? '';
     $volume = $fields['volume'] ?? '';
@@ -509,8 +550,43 @@ function generateCitekey(array $fields, ?string $editingCitekey = null): string 
         return 'zenodo_' . $zenodoId . '_' . $year;
     }
     
+    // Check for software entries (detect by title patterns with version/revision)
+    $title = $fields['title'] ?? '';
     $journal = $fields['journal'] ?? '';
     $booktitle = $fields['booktitle'] ?? '';
+    
+    // Software detection: entries without journal/booktitle that have version patterns in title
+    if (empty($journal) && empty($booktitle)) {
+        // Clean title for analysis (remove braces, tildes, etc.)
+        $cleanTitle = preg_replace('/[{}~\\\\]/', ' ', $title);
+        $cleanTitle = preg_replace('/\s+/', ' ', trim($cleanTitle));
+        
+        // Pattern: Software name followed by version number and optional revision
+        if (preg_match('/^(.+?)\s*(\d+)\s*[\(\s]*(?:Revision|Rev\.?|Version|Ver\.?|Release|R)\s*([A-Za-z]?\d*\.?\d*[a-z]?)/i', $cleanTitle, $matches)) {
+            $softwareName = preg_replace('/[^a-z0-9]/', '', strtolower(trim($matches[1])));
+            $majorVersion = $matches[2];
+            $revision = preg_replace('/[^a-z0-9]/', '', strtolower($matches[3]));
+            
+            if ($softwareName && $majorVersion) {
+                $key = $softwareName . '_' . $majorVersion;
+                if ($revision) {
+                    $key .= '_' . $revision;
+                }
+                return $key;
+            }
+        }
+        
+        // Simpler pattern: "Name Version" or "Name vX.Y"
+        if (preg_match('/^(.+?)\s+v?(\d+(?:\.\d+)*[a-z]?)$/i', $cleanTitle, $matches)) {
+            $softwareName = preg_replace('/[^a-z0-9]/', '', strtolower(trim($matches[1])));
+            $version = preg_replace('/[^a-z0-9]/', '', strtolower($matches[2]));
+            
+            if ($softwareName && $version) {
+                return $softwareName . '_' . $version;
+            }
+        }
+    }
+    
     $volume = $fields['volume'] ?? '';
     $pages = $fields['pages'] ?? '';
     
@@ -524,7 +600,6 @@ function generateCitekey(array $fields, ?string $editingCitekey = null): string 
     }
     
     $year = $fields['year'] ?? '';
-    $title = $fields['title'] ?? '';
     
     // Extract first page if range given
     if (strpos($pages, '-') !== false || strpos($pages, '--') !== false) {
