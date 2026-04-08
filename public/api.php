@@ -1179,15 +1179,13 @@ function handleRequest(): void {
             
             case 'search_doi':
                 $query = $input['query'] ?? '';
-                if (!$query) {
-                    errorResponse('Search query required');
-                }
+                $journal = $input['journal'] ?? '';
+                $volume = $input['volume'] ?? '';
+                $page = $input['page'] ?? '';
                 
-                // Search CrossRef for DOIs matching the query
-                $url = 'https://api.crossref.org/works?' . http_build_query([
-                    'query.bibliographic' => $query,
-                    'rows' => 5
-                ]);
+                if (!$query && !($journal && $volume && $page)) {
+                    errorResponse('Search query or journal+volume+page required');
+                }
                 
                 $context = stream_context_create([
                     'http' => [
@@ -1197,42 +1195,466 @@ function handleRequest(): void {
                     ]
                 ]);
                 
-                $response = @file_get_contents($url, false, $context);
-                if ($response === false) {
-                    errorResponse('CrossRef search failed');
-                }
-                
-                $data = json_decode($response, true);
-                if (!$data || !isset($data['message']['items'])) {
-                    errorResponse('Invalid CrossRef response');
-                }
-                
                 $results = [];
-                foreach ($data['message']['items'] as $item) {
-                    $authorNames = [];
-                    if (isset($item['author'])) {
-                        foreach ($item['author'] as $a) {
-                            $family = $a['family'] ?? '';
-                            $given = $a['given'] ?? '';
-                            if ($family && $given) {
-                                // Format as "Given Family" for readability
-                                $authorNames[] = $given . ' ' . $family;
-                            } elseif ($family) {
-                                $authorNames[] = $family;
-                            } elseif (isset($a['name'])) {
-                                $authorNames[] = $a['name'];
+                $seenDois = [];
+                
+                // Extract first page number
+                $firstPage = $page;
+                if (preg_match('/^(\d+)/', $page, $m)) {
+                    $firstPage = $m[1];
+                }
+                
+                // Try to construct DOI directly for known journal patterns
+                $constructedDois = [];
+                $journalLower = strtolower($journal);
+                
+                // APS journals - DOI pattern: 10.1103/{JournalCode}.{volume}.{page}
+                $apsPatterns = [
+                    'phys. rev. lett.' => 'PhysRevLett',
+                    'physical review letters' => 'PhysRevLett',
+                    'prl' => 'PhysRevLett',
+                    'phys. rev. b' => 'PhysRevB',
+                    'physical review b' => 'PhysRevB',
+                    'prb' => 'PhysRevB',
+                    'phys. rev. a' => 'PhysRevA',
+                    'physical review a' => 'PhysRevA',
+                    'pra' => 'PhysRevA',
+                    'phys. rev. c' => 'PhysRevC',
+                    'phys. rev. d' => 'PhysRevD',
+                    'phys. rev. e' => 'PhysRevE',
+                    'rev. mod. phys.' => 'RevModPhys',
+                    'reviews of modern physics' => 'RevModPhys',
+                ];
+                
+                foreach ($apsPatterns as $pattern => $code) {
+                    if (strpos($journalLower, $pattern) !== false && $volume && $firstPage) {
+                        $constructedDois[] = "10.1103/{$code}.{$volume}.{$firstPage}";
+                        break;
+                    }
+                }
+                
+                // IOP journals - pattern: 10.1088/{issn}/{volume}/{issue}/{page}
+                // Simpler pattern for older papers: 10.1088/0022-3719/{volume}/{issue}/{page}
+                if (strpos($journalLower, 'j. phys. c') !== false || strpos($journalLower, 'journal of physics c') !== false) {
+                    if ($volume && $firstPage) {
+                        // Try common issue numbers
+                        for ($issue = 1; $issue <= 24; $issue++) {
+                            $constructedDois[] = "10.1088/0022-3719/{$volume}/{$issue}/{$firstPage}";
+                        }
+                    }
+                }
+                
+                // Validate constructed DOIs by trying to fetch them
+                foreach ($constructedDois as $doi) {
+                    $checkUrl = "https://api.crossref.org/works/" . urlencode($doi);
+                    $checkResponse = @file_get_contents($checkUrl, false, $context);
+                    if ($checkResponse !== false) {
+                        $checkData = json_decode($checkResponse, true);
+                        if ($checkData && isset($checkData['message'])) {
+                            $item = $checkData['message'];
+                            $authorNames = [];
+                            if (isset($item['author'])) {
+                                foreach ($item['author'] as $a) {
+                                    $family = $a['family'] ?? '';
+                                    $given = $a['given'] ?? '';
+                                    if ($family && $given) {
+                                        $authorNames[] = $given . ' ' . $family;
+                                    } elseif ($family) {
+                                        $authorNames[] = $family;
+                                    }
+                                }
+                            }
+                            $seenDois[$doi] = true;
+                            $results[] = [
+                                'doi' => $doi,
+                                'title' => ($item['title'][0] ?? 'No title'),
+                                'authors' => implode(', ', $authorNames),
+                                'year' => $item['published']['date-parts'][0][0] ?? $item['issued']['date-parts'][0][0] ?? '',
+                                'journal' => $item['container-title'][0] ?? '',
+                                'volume' => $item['volume'] ?? '',
+                                'page' => $item['page'] ?? '',
+                                'source' => 'Direct DOI'
+                            ];
+                            break; // Found valid DOI, stop checking
+                        }
+                    }
+                }
+                
+                // Search CrossRef for DOIs matching the query
+                if ($query) {
+                    $url = 'https://api.crossref.org/works?' . http_build_query([
+                        'query.bibliographic' => $query,
+                        'rows' => 5
+                    ]);
+                
+                $response = @file_get_contents($url, false, $context);
+                if ($response !== false) {
+                    $data = json_decode($response, true);
+                    if ($data && isset($data['message']['items'])) {
+                        foreach ($data['message']['items'] as $item) {
+                            $doi = $item['DOI'] ?? '';
+                            if (!$doi || isset($seenDois[$doi])) continue;
+                            $seenDois[$doi] = true;
+                            
+                            $authorNames = [];
+                            if (isset($item['author'])) {
+                                foreach ($item['author'] as $a) {
+                                    $family = $a['family'] ?? '';
+                                    $given = $a['given'] ?? '';
+                                    if ($family && $given) {
+                                        $authorNames[] = $given . ' ' . $family;
+                                    } elseif ($family) {
+                                        $authorNames[] = $family;
+                                    } elseif (isset($a['name'])) {
+                                        $authorNames[] = $a['name'];
+                                    }
+                                }
+                            }
+                            $results[] = [
+                                'doi' => $doi,
+                                'title' => ($item['title'][0] ?? 'No title'),
+                                'authors' => implode(', ', $authorNames),
+                                'year' => $item['published']['date-parts'][0][0] ?? $item['issued']['date-parts'][0][0] ?? '',
+                                'journal' => $item['container-title'][0] ?? '',
+                                'volume' => $item['volume'] ?? '',
+                                'page' => $item['page'] ?? '',
+                                'source' => 'CrossRef'
+                            ];
+                        }
+                    }
+                }
+                } // end if ($query)
+                
+                // If CrossRef found few/no results, also search OpenAlex (better coverage for older papers)
+                if (count($results) < 3 && $query) {
+                    $openAlexUrl = 'https://api.openalex.org/works?' . http_build_query([
+                        'search' => $query,
+                        'per_page' => 5,
+                        'select' => 'doi,title,authorships,publication_year,primary_location,biblio'
+                    ]);
+                    
+                    $oaResponse = @file_get_contents($openAlexUrl, false, $context);
+                    if ($oaResponse !== false) {
+                        $oaData = json_decode($oaResponse, true);
+                        if ($oaData && isset($oaData['results'])) {
+                            foreach ($oaData['results'] as $item) {
+                                $doi = $item['doi'] ?? '';
+                                // OpenAlex returns full URL, extract DOI
+                                if ($doi && strpos($doi, 'doi.org/') !== false) {
+                                    $doi = preg_replace('/^https?:\/\/doi\.org\//', '', $doi);
+                                }
+                                if (!$doi || isset($seenDois[$doi])) continue;
+                                $seenDois[$doi] = true;
+                                
+                                $authorNames = [];
+                                if (isset($item['authorships'])) {
+                                    foreach ($item['authorships'] as $auth) {
+                                        if (isset($auth['author']['display_name'])) {
+                                            $authorNames[] = $auth['author']['display_name'];
+                                        }
+                                    }
+                                }
+                                
+                                $journal = '';
+                                if (isset($item['primary_location']['source']['display_name'])) {
+                                    $journal = $item['primary_location']['source']['display_name'];
+                                }
+                                
+                                $results[] = [
+                                    'doi' => $doi,
+                                    'title' => ($item['title'] ?? 'No title'),
+                                    'authors' => implode(', ', $authorNames),
+                                    'year' => $item['publication_year'] ?? '',
+                                    'journal' => $journal,
+                                    'volume' => $item['biblio']['volume'] ?? '',
+                                    'page' => $item['biblio']['first_page'] ?? '',
+                                    'source' => 'OpenAlex'
+                                ];
                             }
                         }
                     }
-                    $results[] = [
-                        'doi' => $item['DOI'] ?? '',
-                        'title' => ($item['title'][0] ?? 'No title'),
-                        'authors' => implode(', ', $authorNames),
-                        'year' => $item['published']['date-parts'][0][0] ?? $item['issued']['date-parts'][0][0] ?? '',
-                        'journal' => $item['container-title'][0] ?? '',
-                        'volume' => $item['volume'] ?? '',
-                        'page' => $item['page'] ?? ''
-                    ];
+                }
+                
+                if (count($results) === 0) {
+                    errorResponse('No DOIs found in CrossRef or OpenAlex');
+                }
+                
+                jsonResponse(['results' => $results]);
+                break;
+            
+            case 'search_isbn':
+                // Search for books using Google Books API
+                $query = $input['query'] ?? '';
+                $title = $input['title'] ?? '';
+                $author = $input['author'] ?? '';
+                $publisher = $input['publisher'] ?? '';
+                $year = $input['year'] ?? '';
+                
+                if (!$query && !$title) {
+                    errorResponse('Search query or title required');
+                }
+                
+                $context = stream_context_create([
+                    'http' => [
+                        'method' => 'GET',
+                        'header' => "Accept: application/json\r\nUser-Agent: BibTeXManager/1.0\r\n",
+                        'timeout' => 15
+                    ]
+                ]);
+                
+                $results = [];
+                
+                // Build Google Books query
+                $searchParts = [];
+                if ($title) {
+                    $searchParts[] = 'intitle:' . urlencode($title);
+                }
+                if ($author) {
+                    // Extract first author's last name
+                    $authorParts = preg_split('/\s+and\s+/i', $author);
+                    if (!empty($authorParts[0])) {
+                        $firstAuthor = trim($authorParts[0]);
+                        if (strpos($firstAuthor, ',') !== false) {
+                            $firstAuthor = trim(explode(',', $firstAuthor)[0]);
+                        }
+                        $searchParts[] = 'inauthor:' . urlencode($firstAuthor);
+                    }
+                }
+                if ($publisher) {
+                    $searchParts[] = 'inpublisher:' . urlencode($publisher);
+                }
+                
+                $googleQuery = !empty($searchParts) ? implode('+', $searchParts) : urlencode($query);
+                $googleUrl = "https://www.googleapis.com/books/v1/volumes?q={$googleQuery}&maxResults=10";
+                
+                $response = @file_get_contents($googleUrl, false, $context);
+                if ($response !== false) {
+                    $data = json_decode($response, true);
+                    if ($data && isset($data['items'])) {
+                        foreach ($data['items'] as $item) {
+                            $info = $item['volumeInfo'] ?? [];
+                            
+                            // Extract ISBNs
+                            $isbn10 = '';
+                            $isbn13 = '';
+                            if (isset($info['industryIdentifiers'])) {
+                                foreach ($info['industryIdentifiers'] as $id) {
+                                    if ($id['type'] === 'ISBN_10') {
+                                        $isbn10 = $id['identifier'];
+                                    } elseif ($id['type'] === 'ISBN_13') {
+                                        $isbn13 = $id['identifier'];
+                                    }
+                                }
+                            }
+                            
+                            // Skip entries without ISBN
+                            if (!$isbn10 && !$isbn13) continue;
+                            
+                            // Extract authors
+                            $authors = isset($info['authors']) ? implode(' and ', $info['authors']) : '';
+                            
+                            // Extract year from publishedDate
+                            $pubYear = '';
+                            if (isset($info['publishedDate'])) {
+                                if (preg_match('/^(\d{4})/', $info['publishedDate'], $m)) {
+                                    $pubYear = $m[1];
+                                }
+                            }
+                            
+                            $results[] = [
+                                'isbn' => $isbn13 ?: $isbn10,
+                                'isbn10' => $isbn10,
+                                'isbn13' => $isbn13,
+                                'title' => $info['title'] ?? 'No title',
+                                'authors' => $authors,
+                                'year' => $pubYear,
+                                'publisher' => $info['publisher'] ?? '',
+                                'source' => 'Google Books'
+                            ];
+                        }
+                    }
+                }
+                
+                // Also try Open Library
+                $olQuery = urlencode($title ?: $query);
+                // Timeout context for edition lookups (Open Library can be slow)
+                $editionContext = stream_context_create([
+                    'http' => [
+                        'method' => 'GET',
+                        'header' => "Accept: application/json\r\nUser-Agent: BibTeXManager/1.0\r\n",
+                        'timeout' => 12
+                    ]
+                ]);
+                
+                $olUrl = "https://openlibrary.org/search.json?title={$olQuery}&limit=5";
+                
+                $olResponse = @file_get_contents($olUrl, false, $context);
+                $editionLookups = 0; // Limit edition API calls (slow, ~10s each)
+                $maxEditionLookups = 1;
+                
+                if ($olResponse !== false) {
+                    $olData = json_decode($olResponse, true);
+                    if ($olData && isset($olData['docs'])) {
+                        foreach ($olData['docs'] as $doc) {
+                            // Get ISBN - first try direct from search results
+                            $isbn = '';
+                            $isbn10 = '';
+                            $isbn13 = '';
+                            if (isset($doc['isbn']) && !empty($doc['isbn'])) {
+                                // Prefer ISBN-13 (starts with 978 or 979)
+                                foreach ($doc['isbn'] as $i) {
+                                    if (strlen($i) === 13) {
+                                        $isbn13 = $i;
+                                        if (!$isbn) $isbn = $i;
+                                    } elseif (strlen($i) === 10) {
+                                        $isbn10 = $i;
+                                        if (!$isbn) $isbn = $i;
+                                    }
+                                }
+                            }
+                            
+                            // Track edition data for fallback
+                            $editionAuthors = '';
+                            $editionPublisher = '';
+                            $editionYear = '';
+                            
+                            // If no ISBN in search results, try to fetch from editions endpoint (limited)
+                            if (!$isbn && isset($doc['key']) && $editionLookups < $maxEditionLookups) {
+                                $editionLookups++;
+                                $workKey = $doc['key']; // e.g., /works/OL19605581W
+                                $editionsUrl = "https://openlibrary.org{$workKey}/editions.json?limit=1";
+                                $edResponse = @file_get_contents($editionsUrl, false, $editionContext);
+                                if ($edResponse !== false) {
+                                    $edData = json_decode($edResponse, true);
+                                    if ($edData && isset($edData['entries'])) {
+                                        foreach ($edData['entries'] as $edition) {
+                                            // Check for ISBN-13 first
+                                            if (isset($edition['isbn_13']) && !empty($edition['isbn_13'])) {
+                                                $isbn13 = $edition['isbn_13'][0];
+                                                $isbn = $isbn13;
+                                            }
+                                            // Check for ISBN-10
+                                            if (isset($edition['isbn_10']) && !empty($edition['isbn_10'])) {
+                                                $isbn10 = $edition['isbn_10'][0];
+                                                if (!$isbn) $isbn = $isbn10;
+                                            }
+                                            
+                                            // Extract contributors/editors (for edited volumes)
+                                            if (isset($edition['contributions']) && !empty($edition['contributions'])) {
+                                                $editionAuthors = implode(' and ', $edition['contributions']);
+                                            }
+                                            // Extract authors if available
+                                            if (isset($edition['authors']) && !empty($edition['authors'])) {
+                                                // Authors are references like {"key": "/authors/OL123A"}
+                                                // Use by_statement as fallback
+                                            }
+                                            // Use by_statement as additional info (e.g., "edited by X and Y")
+                                            if (!$editionAuthors && isset($edition['by_statement'])) {
+                                                $byStmt = $edition['by_statement'];
+                                                // Extract names from "edited by X and Y" or "by X"
+                                                if (preg_match('/(?:edited\s+)?by\s+(.+?)\.?$/i', $byStmt, $m)) {
+                                                    $editionAuthors = trim($m[1]);
+                                                }
+                                            }
+                                            
+                                            // Extract publisher
+                                            if (isset($edition['publishers']) && !empty($edition['publishers'])) {
+                                                $editionPublisher = $edition['publishers'][0];
+                                            }
+                                            
+                                            // Extract year from publish_date
+                                            if (isset($edition['publish_date'])) {
+                                                if (preg_match('/(\d{4})/', $edition['publish_date'], $ym)) {
+                                                    $editionYear = $ym[1];
+                                                }
+                                            }
+                                            
+                                            if ($isbn) break; // Found ISBN, stop looking
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            if (!$isbn) continue;
+                            
+                            // Skip duplicates
+                            $isDupe = false;
+                            foreach ($results as $r) {
+                                if ($r['isbn'] === $isbn || $r['isbn13'] === $isbn || $r['isbn10'] === $isbn) {
+                                    $isDupe = true;
+                                    break;
+                                }
+                            }
+                            if ($isDupe) continue;
+                            
+                            // Get authors from search results, fallback to edition data
+                            $authors = isset($doc['author_name']) ? implode(' and ', $doc['author_name']) : '';
+                            if (!$authors && $editionAuthors) {
+                                $authors = $editionAuthors;
+                            }
+                            
+                            // Get year from search results, fallback to edition data
+                            $pubYear = '';
+                            if (isset($doc['publish_year']) && !empty($doc['publish_year'])) {
+                                $pubYear = $doc['publish_year'][0];
+                            } elseif (isset($doc['first_publish_year'])) {
+                                $pubYear = $doc['first_publish_year'];
+                            } elseif ($editionYear) {
+                                $pubYear = $editionYear;
+                            }
+                            
+                            // Get publisher from search results, fallback to edition data
+                            $publisher = isset($doc['publisher']) ? $doc['publisher'][0] : '';
+                            if (!$publisher && $editionPublisher) {
+                                $publisher = $editionPublisher;
+                            }
+                            
+                            $results[] = [
+                                'isbn' => $isbn,
+                                'isbn10' => $isbn10,
+                                'isbn13' => $isbn13,
+                                'title' => $doc['title'] ?? 'No title',
+                                'authors' => $authors,
+                                'year' => $pubYear,
+                                'publisher' => $publisher,
+                                'source' => 'Open Library'
+                            ];
+                        }
+                    }
+                }
+                
+                // Filter by year if provided and rank by title match
+                if (count($results) > 0) {
+                    $searchTitle = strtolower(preg_replace('/[^a-z0-9]+/', ' ', strtolower($title ?: $query)));
+                    $yearNum = $year ? intval($year) : 0;
+                    
+                    usort($results, function($a, $b) use ($searchTitle, $yearNum) {
+                        // Calculate title similarity
+                        $aTitle = strtolower(preg_replace('/[^a-z0-9]+/', ' ', strtolower($a['title'])));
+                        $bTitle = strtolower(preg_replace('/[^a-z0-9]+/', ' ', strtolower($b['title'])));
+                        
+                        $aTitleMatch = ($aTitle === $searchTitle) ? 2 : (strpos($aTitle, $searchTitle) !== false || strpos($searchTitle, $aTitle) !== false ? 1 : 0);
+                        $bTitleMatch = ($bTitle === $searchTitle) ? 2 : (strpos($bTitle, $searchTitle) !== false || strpos($searchTitle, $bTitle) !== false ? 1 : 0);
+                        
+                        if ($aTitleMatch !== $bTitleMatch) {
+                            return $bTitleMatch - $aTitleMatch; // Higher match first
+                        }
+                        
+                        // Then by year proximity
+                        if ($yearNum > 0) {
+                            $aYear = intval($a['year']) ?: 0;
+                            $bYear = intval($b['year']) ?: 0;
+                            $aYearDiff = $aYear ? abs($aYear - $yearNum) : 100;
+                            $bYearDiff = $bYear ? abs($bYear - $yearNum) : 100;
+                            return $aYearDiff - $bYearDiff;
+                        }
+                        
+                        return 0;
+                    });
+                }
+                
+                if (count($results) === 0) {
+                    errorResponse('No ISBNs found in Google Books or Open Library');
                 }
                 
                 jsonResponse(['results' => $results]);

@@ -1098,13 +1098,23 @@
 
     async function findDoiForEntry() {
         // Get current form values
+        const entryType = document.getElementById('entry-type').value.toLowerCase();
         const title = document.getElementById('entry-title').value.trim();
         const author = document.getElementById('entry-author').value.trim();
         const year = document.getElementById('entry-year').value.trim();
         const journal = document.getElementById('entry-journal').value.trim();
         const volume = document.getElementById('entry-volume').value.trim();
         const pages = document.getElementById('entry-pages').value.trim();
+        const publisher = document.getElementById('entry-publisher')?.value?.trim() || '';
         const doiField = document.getElementById('entry-doi');
+        const isbnField = document.getElementById('entry-isbn');
+        
+        // Check if this is a book-like entry
+        const isBook = ['book', 'inbook', 'incollection', 'proceedings', 'inproceedings', 'booklet'].includes(entryType);
+        
+        if (isBook) {
+            return findIsbnForEntry(title, author, publisher, year);
+        }
         
         // Extract author last names for search
         function getAuthorLastNames(authorStr) {
@@ -1115,10 +1125,33 @@
             }).filter(n => n);
         }
         
+        // Strip LaTeX formatting from title for search queries
+        function stripLatexForSearch(str) {
+            let result = str;
+            // Remove math mode markers $...$
+            result = result.replace(/\$([^$]*)\$/g, '$1');
+            // Remove subscripts/superscripts: _{...} ^{...} _x ^x
+            result = result.replace(/[_^]\{[^}]*\}/g, '');
+            result = result.replace(/[_^][a-zA-Z0-9]/g, '');
+            // Remove braces but keep content
+            result = result.replace(/\{([^{}]*)\}/g, '$1');
+            // Remove remaining nested braces
+            while (result.includes('{') || result.includes('}')) {
+                result = result.replace(/[{}]/g, '');
+            }
+            // Clean up multiple spaces
+            result = result.replace(/\s+/g, ' ').trim();
+            return result;
+        }
+        
+        // Check if title is meaningful (not just braces/spaces/math)
+        const cleanTitle = stripLatexForSearch(title);
+        const hasTitle = cleanTitle.length > 0;
+        
         // Check if we have enough info to search
         let query = '';
-        if (title) {
-            query = title;
+        if (hasTitle) {
+            query = cleanTitle;
             if (author) {
                 // Add first author's last name
                 const lastNames = getAuthorLastNames(author);
@@ -1149,16 +1182,16 @@
             }
         }
         
-        if (!query) {
+        if (!query && !(journal && volume && pages)) {
             setStatus(elements.formStatus, 'Need title or journal+volume+pages to search', 'error');
             return;
         }
         
-        setStatus(elements.formStatus, 'Searching CrossRef...', 'loading');
+        setStatus(elements.formStatus, 'Searching CrossRef & OpenAlex...', 'loading');
         showLoading();
         
         try {
-            const data = await apiCall('search_doi', { query });
+            const data = await apiCall('search_doi', { query, journal, volume, page: pages });
             let items = data.results || [];
             
             if (items.length === 0) {
@@ -1192,6 +1225,118 @@
         } finally {
             hideLoading();
         }
+    }
+
+    async function findIsbnForEntry(title, author, publisher, year) {
+        // Strip LaTeX formatting from title
+        function stripLatexForSearch(str) {
+            let result = str;
+            result = result.replace(/\$([^$]*)\$/g, '$1');
+            result = result.replace(/[_^]\{[^}]*\}/g, '');
+            result = result.replace(/[_^][a-zA-Z0-9]/g, '');
+            result = result.replace(/\{([^{}]*)\}/g, '$1');
+            while (result.includes('{') || result.includes('}')) {
+                result = result.replace(/[{}]/g, '');
+            }
+            result = result.replace(/\s+/g, ' ').trim();
+            return result;
+        }
+        
+        const cleanTitle = stripLatexForSearch(title);
+        const cleanPublisher = stripLatexForSearch(publisher);
+        
+        if (!cleanTitle) {
+            setStatus(elements.formStatus, 'Need a title to search for books', 'error');
+            return;
+        }
+        
+        setStatus(elements.formStatus, 'Searching Google Books & Open Library...', 'loading');
+        showLoading();
+        
+        try {
+            const data = await apiCall('search_isbn', { 
+                title: cleanTitle,
+                author: author,
+                publisher: cleanPublisher,
+                year: year
+            });
+            let items = data.results || [];
+            
+            if (items.length === 0) {
+                setStatus(elements.formStatus, 'No ISBNs found', 'error');
+                return;
+            }
+            
+            // Show ISBN selection modal
+            const entryMeta = { title: cleanTitle, author, year, publisher: cleanPublisher };
+            showIsbnSelectModal(items, entryMeta);
+            
+        } catch (error) {
+            setStatus(elements.formStatus, 'Search failed: ' + error.message, 'error');
+        } finally {
+            hideLoading();
+        }
+    }
+
+    function showIsbnSelectModal(items, entryMeta) {
+        const { title, author, year, publisher } = entryMeta;
+        const isbnField = document.getElementById('entry-isbn');
+        
+        // Build current entry info for comparison
+        let currentEntryHtml = '<div class="doi-current-label">Looking for:</div>';
+        if (title) {
+            currentEntryHtml += `<div class="doi-current-title">${escapeHtml(title)}</div>`;
+        }
+        if (author) {
+            currentEntryHtml += `<div class="doi-current-authors">${escapeHtml(author)}</div>`;
+        }
+        const metaParts = [];
+        if (year) metaParts.push(`(${year})`);
+        if (publisher) metaParts.push(escapeHtml(publisher));
+        if (metaParts.length > 0) {
+            currentEntryHtml += `<div class="doi-current-meta">${metaParts.join(' ')}</div>`;
+        }
+        elements.doiCurrentEntry.innerHTML = currentEntryHtml;
+        
+        // Build the results list
+        const html = items.map((item, i) => {
+            const yearMatch = year && item.year && item.year.toString() === year;
+            const isHighlighted = yearMatch;
+            
+            // Build bibliographic details line
+            const bibParts = [];
+            if (item.year) bibParts.push(`(${item.year})`);
+            if (item.publisher) bibParts.push(escapeHtml(item.publisher));
+            
+            const sourceTag = item.source ? `<span class="doi-result-source">${escapeHtml(item.source)}</span>` : '';
+            
+            return `
+                <div class="doi-result-card${isHighlighted ? ' highlighted' : ''}" data-index="${i}" data-type="isbn">
+                    <div class="doi-result-title">
+                        ${escapeHtml(item.title || 'Untitled')}
+                        ${isHighlighted ? '<span class="doi-result-badge">Match</span>' : ''}
+                        ${sourceTag}
+                    </div>
+                    <div class="doi-result-authors">${escapeHtml(item.authors || 'Unknown authors')}</div>
+                    <div class="doi-result-meta">${bibParts.join(' ')}</div>
+                    <div class="doi-result-doi">ISBN: ${escapeHtml(item.isbn)}</div>
+                </div>
+            `;
+        }).join('');
+        
+        elements.doiResultsList.innerHTML = html;
+        elements.modalDoiSelect.classList.add('active');
+        clearStatus(elements.formStatus);
+        
+        // Store items for selection handler
+        elements.doiResultsList.dataset.items = JSON.stringify(items);
+        elements.doiResultsList.dataset.doiFieldId = isbnField ? isbnField.id : '';
+        elements.doiResultsList.dataset.isIsbn = 'true';
+        
+        // Add click handlers to cards
+        elements.doiResultsList.querySelectorAll('.doi-result-card').forEach(card => {
+            card.addEventListener('click', handleDoiResultClick);
+        });
     }
 
     function showDoiSelectModal(items, entryMeta, doiField) {
@@ -1231,11 +1376,15 @@
             if (item.volume) bibParts.push(`vol. ${item.volume}`);
             if (item.page) bibParts.push(`p. ${item.page}`);
             
+            // Show source if available (CrossRef vs OpenAlex)
+            const sourceTag = item.source ? `<span class="doi-result-source">${escapeHtml(item.source)}</span>` : '';
+            
             return `
                 <div class="doi-result-card${isHighlighted ? ' highlighted' : ''}" data-index="${i}">
                     <div class="doi-result-title">
                         ${escapeHtml(cleanTitle)}
                         ${isHighlighted ? '<span class="doi-result-badge">Match</span>' : ''}
+                        ${sourceTag}
                     </div>
                     <div class="doi-result-authors">${escapeHtml(item.authors || 'Unknown authors')}</div>
                     <div class="doi-result-meta">${bibParts.join(' ')}</div>
@@ -1251,6 +1400,7 @@
         // Store items for selection handler
         elements.doiResultsList.dataset.items = JSON.stringify(items);
         elements.doiResultsList.dataset.doiFieldId = doiField.id;
+        elements.doiResultsList.dataset.isIsbn = 'false';
         
         // Add click handlers to cards
         elements.doiResultsList.querySelectorAll('.doi-result-card').forEach(card => {
@@ -1262,6 +1412,58 @@
         const card = e.currentTarget;
         const index = parseInt(card.dataset.index, 10);
         const items = JSON.parse(elements.doiResultsList.dataset.items);
+        const isIsbn = elements.doiResultsList.dataset.isIsbn === 'true';
+        
+        if (isIsbn) {
+            // Handle ISBN selection
+            const selectedItem = items[index];
+            const isbnField = document.getElementById('entry-isbn');
+            
+            if (isbnField) {
+                isbnField.value = selectedItem.isbn;
+                isbnField.dispatchEvent(new Event('input'));
+            }
+            
+            // Close modal
+            elements.modalDoiSelect.classList.remove('active');
+            elements.doiResultsList.dataset.isIsbn = 'false';
+            
+            // Update other book fields if available
+            if (selectedItem.authors) {
+                const authorField = document.getElementById('entry-author');
+                const editorField = document.getElementById('entry-editor');
+                // For books, prefer editor field if both are empty; otherwise fill whichever is empty
+                const authorEmpty = authorField && !authorField.value;
+                const editorEmpty = editorField && !editorField.value;
+                
+                if (editorEmpty) {
+                    editorField.value = selectedItem.authors;
+                    editorField.dispatchEvent(new Event('input'));
+                } else if (authorEmpty) {
+                    authorField.value = selectedItem.authors;
+                    authorField.dispatchEvent(new Event('input'));
+                }
+            }
+            if (selectedItem.publisher) {
+                const pubField = document.getElementById('entry-publisher');
+                if (pubField && !pubField.value) {
+                    pubField.value = selectedItem.publisher;
+                    pubField.dispatchEvent(new Event('input'));
+                }
+            }
+            if (selectedItem.year) {
+                const yearField = document.getElementById('entry-year');
+                if (yearField && !yearField.value) {
+                    yearField.value = selectedItem.year;
+                    yearField.dispatchEvent(new Event('input'));
+                }
+            }
+            
+            setStatus(elements.formStatus, `ISBN set to ${selectedItem.isbn}`, 'success');
+            return;
+        }
+        
+        // Handle DOI selection (original behavior)
         const doiFieldId = elements.doiResultsList.dataset.doiFieldId;
         const doiField = document.getElementById(doiFieldId);
         
@@ -2314,12 +2516,15 @@
                         issues: entryIssues, 
                         hasDoi: !!fields.doi, 
                         doi: fields.doi,
+                        entryType: entry.type || '',
                         title: fields.title || '',
                         author: fields.author || '',
                         year: fields.year || '',
                         journal: fields.journal || '',
                         volume: fields.volume || '',
-                        pages: fields.pages || ''
+                        pages: fields.pages || '',
+                        publisher: fields.publisher || '',
+                        isbn: fields.isbn || ''
                     });
                 }
             }
@@ -2337,9 +2542,18 @@
                     html += '<strong>' + escapeHtml(item.citekey) + '</strong>';
                     if (item.hasDoi) {
                         html += ' <button class="btn btn-small btn-fix-doi" data-doi="' + escapeHtml(item.doi) + '">Fix from DOI</button>';
-                    } else if (item.title || (item.journal && item.volume && item.pages)) {
-                        // No DOI but has title OR bibliographic info (journal/volume/pages) - offer to find DOI
-                        html += ' <button class="btn btn-small btn-find-doi" data-title="' + escapeHtml(item.title) + '" data-author="' + escapeHtml(item.author) + '" data-year="' + escapeHtml(item.year) + '" data-journal="' + escapeHtml(item.journal) + '" data-volume="' + escapeHtml(item.volume) + '" data-pages="' + escapeHtml(item.pages) + '">Find DOI</button>';
+                    } else {
+                        // Check if this is a book entry type
+                        const bookTypes = ['book', 'inbook', 'incollection', 'proceedings', 'inproceedings', 'booklet'];
+                        const isBookType = bookTypes.includes((item.entryType || '').toLowerCase());
+                        
+                        if (isBookType && (item.title || item.author)) {
+                            // Book entry - offer to find ISBN
+                            html += ' <button class="btn btn-small btn-find-isbn" data-title="' + escapeHtml(item.title) + '" data-author="' + escapeHtml(item.author) + '" data-year="' + escapeHtml(item.year) + '" data-publisher="' + escapeHtml(item.publisher) + '">Find ISBN</button>';
+                        } else if (item.title || (item.journal && item.volume && item.pages)) {
+                            // No DOI but has title OR bibliographic info (journal/volume/pages) - offer to find DOI
+                            html += ' <button class="btn btn-small btn-find-doi" data-title="' + escapeHtml(item.title) + '" data-author="' + escapeHtml(item.author) + '" data-year="' + escapeHtml(item.year) + '" data-journal="' + escapeHtml(item.journal) + '" data-volume="' + escapeHtml(item.volume) + '" data-pages="' + escapeHtml(item.pages) + '">Find DOI</button>';
+                        }
                     }
                     html += '</div>';
                     html += '<ul>';
@@ -2761,6 +2975,185 @@
                         e.target.textContent = 'Search failed';
                         e.target.classList.add('btn-danger');
                         console.error('Find DOI search failed:', error);
+                    }
+                });
+            });
+            
+            // Add click handlers for Find ISBN buttons
+            elements.validateResults.querySelectorAll('.btn-find-isbn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const title = e.target.dataset.title;
+                    const author = e.target.dataset.author;
+                    const year = e.target.dataset.year;
+                    const publisher = e.target.dataset.publisher;
+                    const entryDiv = e.target.closest('.validate-entry');
+                    const citekey = entryDiv.dataset.citekey;
+                    const resultsDiv = entryDiv.querySelector('.doi-search-results');
+                    
+                    e.target.disabled = true;
+                    e.target.textContent = 'Searching...';
+                    
+                    try {
+                        // Extract author last names for search
+                        function getAuthorLastNames(authorStr) {
+                            if (!authorStr) return [];
+                            return authorStr.split(' and ').map(a => {
+                                const parts = a.split(',');
+                                return parts[0].trim().replace(/[{}]/g, '');
+                            }).filter(n => n);
+                        }
+                        
+                        // Build search query
+                        let query = '';
+                        if (title) {
+                            query = title.replace(/[{}]/g, '');
+                        }
+                        if (author) {
+                            const lastNames = getAuthorLastNames(author);
+                            if (lastNames.length > 0) {
+                                query += ' ' + lastNames.slice(0, 2).join(' ');
+                            }
+                        }
+                        
+                        if (!query.trim()) {
+                            e.target.textContent = 'No search data';
+                            e.target.classList.add('btn-danger');
+                            return;
+                        }
+                        
+                        // Search via backend API
+                        const data = await apiCall('search_isbn', { 
+                            title: title || '', 
+                            author: author || '', 
+                            year: year || '',
+                            publisher: publisher || ''
+                        });
+                        let items = data.results || [];
+                        
+                        if (items.length === 0) {
+                            e.target.textContent = 'No results';
+                            e.target.classList.add('btn-danger');
+                            return;
+                        }
+                        
+                        // Sort by year match if we have a year
+                        if (year) {
+                            const yearNum = parseInt(year, 10);
+                            items.sort((a, b) => {
+                                const aYear = parseInt(a.year, 10) || 0;
+                                const bYear = parseInt(b.year, 10) || 0;
+                                const aDiff = Math.abs(aYear - yearNum);
+                                const bDiff = Math.abs(bYear - yearNum);
+                                return aDiff - bDiff;
+                            });
+                        }
+                        
+                        // Show existing entry metadata for comparison
+                        let resultsHtml = '<div class="doi-results-list">';
+                        resultsHtml += '<div class="existing-entry-info">';
+                        resultsHtml += '<p><strong>Existing entry:</strong></p>';
+                        if (title) {
+                            resultsHtml += `<div class="existing-title">${escapeHtml(title)}</div>`;
+                        } else {
+                            resultsHtml += `<div class="existing-title">(No title)</div>`;
+                        }
+                        let metaParts = [];
+                        if (author) metaParts.push(escapeHtml(author));
+                        if (year) metaParts.push('(' + year + ')');
+                        if (publisher) metaParts.push(escapeHtml(publisher));
+                        resultsHtml += `<div class="existing-meta">${metaParts.join(' ')}</div>`;
+                        resultsHtml += '</div>';
+                        resultsHtml += '<p><strong>Select matching ISBN:</strong></p>';
+                        
+                        for (const item of items) {
+                            const yearMatch = year && item.year && item.year.toString() === year;
+                            const matchClass = yearMatch ? ' year-match' : '';
+                            resultsHtml += `<div class="doi-result-item isbn-result-item${matchClass}" data-isbn="${escapeHtml(item.isbn)}" data-authors="${escapeHtml(item.authors || '')}" data-publisher="${escapeHtml(item.publisher || '')}" data-year="${escapeHtml(item.year || '')}">`;
+                            resultsHtml += `<div class="doi-result-title">${escapeHtml(item.title)}</div>`;
+                            let resultMeta = escapeHtml(item.authors || '');
+                            if (item.year) resultMeta += ' (' + item.year + ')';
+                            if (item.publisher) resultMeta += ' — ' + escapeHtml(item.publisher);
+                            resultsHtml += `<div class="doi-result-meta">${resultMeta}</div>`;
+                            resultsHtml += `<div class="doi-result-doi">ISBN: ${escapeHtml(item.isbn)}</div>`;
+                            if (item.source) {
+                                resultsHtml += `<div class="doi-result-source">${escapeHtml(item.source)}</div>`;
+                            }
+                            resultsHtml += '</div>';
+                        }
+                        resultsHtml += '<button class="btn btn-small btn-cancel-search">Cancel</button></div>';
+                        
+                        resultsDiv.innerHTML = resultsHtml;
+                        resultsDiv.style.display = 'block';
+                        e.target.style.display = 'none';
+                        
+                        // Add click handlers for results
+                        resultsDiv.querySelectorAll('.isbn-result-item').forEach(item => {
+                            item.addEventListener('click', async () => {
+                                const selectedIsbn = item.dataset.isbn;
+                                const selectedAuthors = item.dataset.authors;
+                                const selectedPublisher = item.dataset.publisher;
+                                const selectedYear = item.dataset.year;
+                                
+                                resultsDiv.innerHTML = '<p>Updating with ISBN: ' + escapeHtml(selectedIsbn) + '...</p>';
+                                
+                                try {
+                                    // Find the entry and update its ISBN field
+                                    const entry = state.entries.find(ent => ent.citekey === citekey);
+                                    if (!entry) {
+                                        throw new Error('Entry not found');
+                                    }
+                                    
+                                    // Update ISBN
+                                    entry.fields.isbn = selectedIsbn;
+                                    
+                                    // Optionally update other fields if missing
+                                    if (!entry.fields.publisher && selectedPublisher) {
+                                        entry.fields.publisher = selectedPublisher;
+                                    }
+                                    if (!entry.fields.year && selectedYear) {
+                                        entry.fields.year = selectedYear;
+                                    }
+                                    // Update author/editor if missing
+                                    if (selectedAuthors) {
+                                        // For book types, prefer editor field; otherwise use author
+                                        const bookTypes = ['book', 'inbook', 'incollection', 'proceedings'];
+                                        const isBook = bookTypes.includes(entry.type.toLowerCase());
+                                        if (isBook && !entry.fields.editor) {
+                                            entry.fields.editor = selectedAuthors;
+                                        } else if (!entry.fields.author) {
+                                            entry.fields.author = selectedAuthors;
+                                        }
+                                    }
+                                    
+                                    // Save the updated entry
+                                    await apiCall('save', {
+                                        entry: entry,
+                                        cleanTitle: false
+                                    });
+                                    
+                                    // Mark as fixed
+                                    entryDiv.classList.add('fixed');
+                                    resultsDiv.innerHTML = `<p class="success">ISBN added: ${escapeHtml(selectedIsbn)}</p>`;
+                                    
+                                } catch (err) {
+                                    resultsDiv.innerHTML = `<p class="error">Failed: ${escapeHtml(err.message)}</p>`;
+                                    console.error('Find ISBN fix failed:', err);
+                                }
+                            });
+                        });
+                        
+                        // Cancel button
+                        resultsDiv.querySelector('.btn-cancel-search').addEventListener('click', () => {
+                            resultsDiv.style.display = 'none';
+                            e.target.style.display = '';
+                            e.target.disabled = false;
+                            e.target.textContent = 'Find ISBN';
+                        });
+                        
+                    } catch (error) {
+                        e.target.textContent = 'Search failed';
+                        e.target.classList.add('btn-danger');
+                        console.error('Find ISBN search failed:', error);
                     }
                 });
             });

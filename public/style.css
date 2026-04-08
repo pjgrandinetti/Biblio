@@ -861,6 +861,17 @@ body[data-entry-type="unpublished"] .field-unpublished {
     vertical-align: middle;
 }
 
+.doi-result-source {
+    display: inline-block;
+    background: #7f8c8d;
+    color: white;
+    font-size: 0.7em;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    margin-left: 0.5rem;
+    vertical-align: middle;
+}
+
 .validate-entry-header {
     display: flex;
     align-items: center;
