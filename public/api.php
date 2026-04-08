@@ -369,8 +369,9 @@ function generateCitekeyForEntry(array $entry): string {
     // Software detection: entries without journal/booktitle that have version patterns in title
     // Pattern matches: "Name XX (Revision Y.Z)", "Name~XX Revision Y.Z", "Name Version X.Y", etc.
     if (empty($journal) && empty($booktitle)) {
-        // Clean title for analysis (remove braces, tildes, etc.)
-        $cleanTitle = preg_replace('/[{}~\\\\]/', ' ', $title);
+        // Clean title for analysis: remove braces/backslashes (keep letters together), tildes become spaces
+        $cleanTitle = preg_replace('/[{}\\\\]/', '', $title);  // Remove braces and backslashes
+        $cleanTitle = preg_replace('/~/', ' ', $cleanTitle);       // Tildes to spaces (LaTeX non-breaking space)
         $cleanTitle = preg_replace('/\s+/', ' ', trim($cleanTitle));
         
         // Pattern: Software name followed by version number and optional revision
@@ -557,8 +558,9 @@ function generateCitekey(array $fields, ?string $editingCitekey = null): string 
     
     // Software detection: entries without journal/booktitle that have version patterns in title
     if (empty($journal) && empty($booktitle)) {
-        // Clean title for analysis (remove braces, tildes, etc.)
-        $cleanTitle = preg_replace('/[{}~\\\\]/', ' ', $title);
+        // Clean title for analysis: remove braces/backslashes (keep letters together), tildes become spaces
+        $cleanTitle = preg_replace('/[{}\\\\]/', '', $title);  // Remove braces and backslashes
+        $cleanTitle = preg_replace('/~/', ' ', $cleanTitle);       // Tildes to spaces (LaTeX non-breaking space)
         $cleanTitle = preg_replace('/\s+/', ' ', trim($cleanTitle));
         
         // Pattern: Software name followed by version number and optional revision
