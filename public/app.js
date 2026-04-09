@@ -1190,16 +1190,24 @@
         try {
             const data = await apiCall('lookup_isbn', { isbn });
             const work = data.work;
+            const source = data.source || 'unknown';
             
             // Keep current citekey
             const currentCitekey = elements.entryCitekey.value;
             
-            // Set entry type to book if not already a book-like type
+            // Determine entry type based on available fields
             const currentType = elements.entryType.value;
-            if (!['book', 'incollection', 'inproceedings'].includes(currentType)) {
-                elements.entryType.value = 'book';
-                document.body.dataset.entryType = 'book';
+            let newType = currentType;
+            
+            // If we have booktitle, it's likely incollection (book chapter)
+            if (work.booktitle && !['incollection', 'inproceedings'].includes(currentType)) {
+                newType = 'incollection';
+            } else if (!['book', 'incollection', 'inproceedings'].includes(currentType)) {
+                newType = 'book';
             }
+            
+            elements.entryType.value = newType;
+            document.body.dataset.entryType = newType;
             
             // Build fields object
             const fields = {};
@@ -1229,6 +1237,21 @@
                 fields.isbn = work.isbn;
             }
             
+            // DOI (new - from CrossRef/publisher lookup)
+            if (work.doi) {
+                fields.doi = work.doi;
+            }
+            
+            // Edition
+            if (work.edition) {
+                fields.edition = work.edition;
+            }
+            
+            // Booktitle (for book chapters)
+            if (work.booktitle) {
+                fields.booktitle = work.booktitle;
+            }
+            
             // Populate form fields
             Object.entries(formFields).forEach(([elementId, fieldName]) => {
                 const el = document.getElementById(elementId);
@@ -1236,6 +1259,17 @@
                     el.value = fields[fieldName];
                 }
             });
+            
+            // Handle DOI/URL field state
+            const doiField = document.getElementById('entry-doi');
+            const urlField = document.getElementById('entry-url');
+            if (work.doi) {
+                doiField.value = work.doi;
+                urlField.disabled = true;
+                urlField.value = '';
+                urlField.placeholder = 'Disabled when DOI is present';
+                elements.btnFindDoi.style.display = 'none';
+            }
             
             // Restore citekey (or generate new one if empty)
             if (currentCitekey) {
@@ -1245,7 +1279,17 @@
                 elements.entryCitekey.value = ckResult.citekey;
             }
             
-            setStatus(elements.formStatus, 'Fields updated from ISBN', 'success');
+            // Show source in status message
+            const sourceNames = {
+                'springer': 'Springer',
+                'elsevier': 'Elsevier',
+                'crossref': 'CrossRef',
+                'openlibrary': 'Open Library',
+                'googlebooks': 'Google Books'
+            };
+            const sourceName = sourceNames[source] || source;
+            const doiNote = work.doi ? ` (DOI: ${work.doi})` : '';
+            setStatus(elements.formStatus, `Fields updated from ${sourceName}${doiNote}`, 'success');
             
         } catch (error) {
             setStatus(elements.formStatus, error.message, 'error');

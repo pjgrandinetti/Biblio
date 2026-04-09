@@ -1,203 +1,282 @@
-# BibTeX Manager — Project Plan
+# BibTeX Manager — Code Overview
 
-## Overview
-
-A lightweight, self-hosted web application for collaborative BibTeX reference management.
-Designed for small research groups who want a shared, browser-accessible bibliography
-without the complexity of Zotero, Mendeley, or a full CMS.
-
-The canonical data store is a plain `.bib` file on the server — compatible directly
-with any LaTeX workflow. No database required.
-
----
-
-## Goals
-
-- Browse, search, and edit a shared `.bib` file via a web browser
-- Add new entries by DOI or arXiv ID (metadata fetched automatically)
-- Review and edit pre-populated entry forms before committing to file
-- Import an existing `.bib` file (with merge and duplicate detection)
-- Export the .bib file
-- in Title, 
-    - all capitalized words should be put inside curly brakets, e.g., {NMR}
-    - all formulas should be put inside curly brackets, e.g. {$^{27}Al}
-    - any html should be converted to latex
-- Simple access control suitable for a trusted research group
-- Deployable on any standard shared hosting account (GreenGeeks, etc.)
-- Codebase shareable via GitHub so others can deploy their own instance
-- Auto-generate bibtex citation key based on rule:
-    - use first letter of each word in journal title (ignore definite articles)
-    - followed by volume
-    - followed by first page (or article number)
-    - followed by year
-    - use underscore to separate journal abbr from volume, page, and year
-    - e.g., The Journal of Chemical Physics, vol 11, page 3443, 1969 becomes jcp_11_3443_1969
-
-
----
-
-## Technology Stack
-
-| Layer | Choice | Reason |
-|-------|--------|--------|
-| Frontend | Vanilla HTML/CSS/JS | No build step, easy to deploy |
-| Backend | PHP 7.4+ | Available by default on shared hosting |
-| Data store | Plain `.bib` file | Direct LaTeX compatibility, no DB needed |
-| Auth | HTTP Basic Auth (`.htaccess`) | Zero-code, browser caches credentials |
-| DOI lookup | CrossRef API | Free, no key, excellent journal coverage |
-| arXiv lookup | arXiv API | Free, no key, covers preprints |
-| Version control | Git / GitHub | Code sharing and deployment history |
+A lightweight, self-hosted web application for managing BibTeX references. No database required — stores everything in a plain `.bib` file.
 
 ---
 
 ## Repository Structure
 
 ```
-bibtex-manager/
-├── public/                  # Deploy this folder to your server
-│   ├── index.html           # Main UI (single-page app)
-│   ├── app.js               # All frontend logic
-│   ├── style.css            # Styling
-│   ├── api.php              # Backend: file read/write, BibTeX parsing
-│   └── .htaccess.example    # Rename to .htaccess and configure password
+Biblio/
+├── public/                         # Web root — deploy this folder
+│   ├── index.html                  # Single-page app UI (~350 lines)
+│   ├── app.js                      # Frontend logic (~3,950 lines)
+│   ├── style.css                   # Styling with dark mode support
+│   ├── api.php                     # Backend API (~2,560 lines)
+│   ├── refs.bib                    # Bibliography data file
+│   ├── journal-abbrevs.json        # ~4,700 journal abbreviations (JabRef database)
+│   ├── journal-abbrevs-custom.json # Custom abbreviation overrides
+│   ├── proper-names.json           # Protected names for title capitalization
+│   └── proper-names-custom.json    # Custom protected names
 ├── sample/
-│   └── refs.bib             # Small representative sample BibTeX file
-└── README.md                # Deployment instructions
+│   └── refs.bib                    # Example bibliography file
+├── README.md                       # Deployment instructions
+└── plan.md                         # This file
 ```
 
-The `public/` directory maps directly to `public_html/biblio/` (or equivalent)
-on the hosting server. No build step — just upload and go.
+---
+
+## Technology Stack
+
+| Layer | Technology | Notes |
+|-------|------------|-------|
+| Frontend | Vanilla HTML/CSS/JS | No build step, no dependencies |
+| Backend | PHP 8.0+ | Standard shared hosting compatible |
+| Storage | Plain `.bib` file | Direct LaTeX compatibility |
+| Auth | HTTP Basic Auth | Via `.htaccess` / `.htpasswd` |
 
 ---
 
-## UI — Three Views (single page, no reloads)
+## Frontend Architecture (`public/app.js`)
 
-### 1. Entry List
-- Paginated table of all entries in `refs.bib`
-- Search/filter by: author, year, title keyword, entry type, journal
-- Each row: citekey, authors, title, year, type
-- Actions per row: **Edit**, **Delete** (with confirmation)
-- Top-level actions: **Add by DOI**, **Add by arXiv ID**, **Import .bib file**, **Download refs.bib**
+### State Management
 
-### 2. DOI / arXiv Lookup
-- Input field for DOI or arXiv ID
-- Fetches metadata from CrossRef or arXiv API
-- Populates entry form on success
-- Error handling: not found, network failure, ambiguous results
+```javascript
+const state = {
+    sessionId,           // Client-generated session ID for locking
+    entries,             // All BibTeX entries from server
+    filteredEntries,     // After search/filter applied
+    currentPage,         // Pagination state
+    entriesPerPage,      // 20, 50, 100, 200, or all
+    sortField,           // 'year', 'author', 'title', 'citekey', 'type'
+    sortDirection,       // 'asc' or 'desc'
+    searchQuery,         // Text filter
+    filterType,          // Entry type filter (article, book, etc.)
+    editingCitekey,      // Citekey being edited (null for new entries)
+    journalAbbreviations,// Loaded from JSON files
+    properNames          // Protected names for title formatting
+};
+```
 
-### 3. Entry Form
-- Editable fields for all standard BibTeX entry types
-- Auto-generated citekey (e.g. `Grandinetti2025`) — user-editable
-- Entry type selector (article, book, inproceedings, misc, etc.) — adjusts visible fields
-- Pre-populated from DOI/arXiv lookup or existing entry (for edits)
-- **Save** → writes to `refs.bib` via `api.php`
-- **Cancel** → returns to entry list without saving
-- Duplicate detection on save: warns if citekey or DOI already exists
+### Views (Single Page Application)
+
+| View | Purpose |
+|------|---------|
+| `view-list` | Paginated entry table with search/filter |
+| `view-doi` | DOI lookup form |
+| `view-arxiv` | arXiv ID lookup form |
+| `view-form` | Entry editor (add/edit) with dynamic field visibility |
+| `view-import` | Import preview with conflict resolution |
+
+### Key Functions
+
+**Metadata Lookup:**
+- `htmlToLatex(text)` — Converts HTML markup and MathML to LaTeX (isotopes, subscripts, superscripts)
+- `lookupJournalAbbreviation(fullName)` — Finds abbreviated journal name from loaded database
+- `formatPersonList(people)` — Formats author/editor arrays to BibTeX style (`Last, First and ...`)
+- `detectEntryType(crossrefType, work)` — Maps CrossRef types to BibTeX types
+- `fetchSemanticScholarTitle(doi)` — Fallback for better title data
+- `fetchPublisherBibtex(doi)` — Fetches BibTeX directly from Elsevier/Springer/Nature APIs
+
+**External API Integration:**
+- Publisher BibTeX (Elsevier, Springer, Nature) — Primary source via backend proxy
+- CrossRef (`api.crossref.org/works/{DOI}`) — Fallback if no publisher BibTeX
+- DataCite (`api.datacite.org`) — Zenodo and arXiv DOIs
+- arXiv (`export.arxiv.org/api/query`) — Preprint metadata
+- Semantic Scholar (`api.semanticscholar.org`) — Title verification
+
+**Form/UI:**
+- `showEntryForm(entry, fromLookup)` — Opens editor with field visibility based on entry type
+- `generateCitekey()` — Calls backend for auto-generated citekey
+- `refreshFromDoi()` / `refreshFromIsbn()` — Re-fetches metadata for existing entry
+- `filterAndSortEntries()` — Applies search/filter/sort to entries
+- `renderEntries()` — Renders paginated table with clickable title links
 
 ---
 
-## Backend — `api.php`
+## Backend Architecture (`public/api.php`)
 
-Single PHP file handling all server-side operations via JSON API.
+### API Endpoints
 
-### Endpoints (POST with `action` parameter)
+All requests are POST to `api.php` with JSON body containing `action` parameter.
 
 | Action | Description |
 |--------|-------------|
-| `list` | Return all parsed entries as JSON |
-| `save` | Add new entry or update existing entry by citekey |
+| `list` | Return all entries as JSON |
+| `save` | Add or update entry (with optional title cleaning) |
 | `delete` | Remove entry by citekey |
-| `import` | Upload and merge a `.bib` file (with conflict report) |
-| `download` | Return raw `refs.bib` content |
+| `import` | Upload `.bib` file, returns preview with conflicts |
+| `import_confirm` | Confirm import with selected entries |
+| `generate_citekey` | Auto-generate citation key from fields |
+| `clean_title` | Apply LaTeX formatting to single entry's title |
+| `clean_all_titles` | Bulk title cleaning |
+| `search_doi` | Search CrossRef/OpenAlex for DOI |
+| `search_isbn` | Search Google Books/Open Library for ISBN |
+| `lookup_isbn` | Fetch metadata by ISBN |
+| `deduplicate_rekey` | Regenerate all citekeys and remove duplicates |
+| `fetch_publisher_bibtex` | Proxy to publisher BibTeX APIs (avoids CORS) |
+| `validate_bibtex` | Check for unescaped LaTeX characters |
+| `fix_bibtex_errors` | Apply fixes for validation errors |
+
+### BibTeX Parser (`BibTeXParser` class)
+
+```php
+class BibTeXParser {
+    public static function parse(string $bibtex): array
+    // Handles: nested braces, @string abbreviations, mixed quoting
+    
+    public static function format(array $entries): string
+    // Outputs normalized BibTeX with consistent field order
+}
+```
+
+**Field Order (on write):**
+author, title, journal, booktitle, publisher, school, year, month, volume, number, pages, article-number, doi, issn, isbn, url, eprint, archiveprefix, primaryclass, howpublished, edition, editor, series, address, note, abstract
+
+### Citation Key Generation
+
+Auto-generated format: `{journalabbr}_{volume}_{page}_{year}`
+
+Special cases:
+- **arXiv:** `arxiv_{id}` (e.g., `arxiv_2102_09844`)
+- **Zenodo:** `zenodo_{id}_{year}`
+- **Software:** `{name}_{version}_{revision}` (detected by title patterns)
+- **In Press:** `{journalabbr}_{author}_inpress_{year}`
+- **Books:** First letter of each title word + author if not unique
+
+### Session Locking
+
+- Prevents concurrent editing conflicts
+- Lock timeout: 5 minutes
+- Client heartbeat refreshes lock
+- Force-unlock available if session expires
 
 ### File Safety
-- `flock()` exclusive lock before every write
-- Write to temp file first, then atomic `rename()` to `refs.bib`
-- Auto-backup: copy `refs.bib` → `refs.bib.bak` before each save
-- Normalize formatting on write (consistent indentation, brace quoting, field order)
 
-### BibTeX Parser
-- Written in PHP, no external libraries
-- Handles: mixed quoting styles, inconsistent whitespace, `@string` abbreviations,
-  entries with missing optional fields, UTF-8 / LaTeX-encoded characters
-- Outputs normalized BibTeX on write
+- `flock()` exclusive lock during writes
+- Atomic write: temp file → `rename()` to `refs.bib`
+- Auto-backup: `refs.bib` → `refs.bib.bak` before each save
 
 ---
 
-## Access Control
+## Title Cleaning (`cleanTitle` in PHP, `htmlToLatex` in JS)
 
-`.htaccess` HTTP Basic Auth:
+Transformations applied:
 
-```apache
-AuthType Basic
-AuthName "BibTeX Manager"
-AuthUserFile /home/yourusername/public_html/biblio/.htpasswd
-Require valid-user
-```
-
-`.htpasswd` generated via:
-- cPanel → Security → Password Protect Directories, or
-- Command line: `htpasswd -c .htpasswd yourusername`
-
-The repo ships `.htaccess.example` — deployers rename and configure for their own server path.
-
----
-
-## External APIs
-
-### CrossRef (DOI lookup)
-```
-GET https://api.crossref.org/works/{DOI}
-```
-- No API key required
-- Returns: authors, title, journal, year, volume, issue, pages, DOI, ISSN
-- Rate limit: polite pool (add `mailto:` param in User-Agent header)
-
-### arXiv (preprint lookup)
-```
-GET https://export.arxiv.org/api/query?id_list={arXiv_ID}
-```
-- No API key required
-- Returns: authors, title, abstract, submission date, arXiv ID
-- Entry type mapped to `@misc` with `howpublished = {arXiv:\{ID\}}`
+| Input | Output | Reason |
+|-------|--------|--------|
+| `17O` / `O17` | `{$^{17}$O}` | Isotope notation |
+| `SiO2` | `{SiO$_{2}$}` | Chemical formulas |
+| `<i>text</i>` | `\textit{text}` | HTML to LaTeX |
+| `<sup>x</sup>` | `$^{x}$` | Superscripts |
+| `<sub>x</sub>` | `$_{x}$` | Subscripts |
+| `NMR`, `MAS` | `{NMR}`, `{MAS}` | Protect acronyms |
+| `Fourier` | `{Fourier}` | Protect proper names |
+| `Iron(II)` | `Iron({II})` | Protect roman numerals |
+| `22 °C` | `{22$^\circ$C}` | Degree symbols |
 
 ---
 
-## Import / Merge Logic
+## External API Integration
 
-1. User uploads a `.bib` file via the browser
-2. PHP parses the uploaded file
-3. Compare against current `refs.bib`:
-   - **New entries** (citekey not present): queued for addition
-   - **Exact duplicates** (all fields match): silently skipped
-   - **Conflicts** (same citekey, different fields): flagged for user resolution
-4. UI shows a preview table: new / skip / conflict counts
-5. User confirms → PHP writes merged file atomically
+### DOI Resolution Flow
 
----
+1. Check if DOI matches publisher pattern (Elsevier `10.1016/`, Springer `10.1007/`, Nature `10.1038/`)
+2. If yes, fetch BibTeX directly from publisher API via backend proxy — **most authoritative source**
+3. If publisher BibTeX unavailable, fall back to CrossRef + Semantic Scholar in parallel
+4. For Zenodo/arXiv DOIs (`10.5281/`, `10.48550/`), use DataCite API instead
+5. Apply journal abbreviation lookup
+6. Convert HTML/MathML in title to LaTeX
+7. Generate citekey
 
-## Deployment Steps (for README)
+### ISBN Resolution Flow
 
-1. Clone or download the repository
-2. Upload contents of `public/` to your server subdomain document root
-   (e.g. `public_html/biblio/`)
-3. Rename `.htaccess.example` → `.htaccess`
-4. Edit `.htaccess`: update `AuthUserFile` path to your server's absolute path
-5. Generate `.htpasswd` via cPanel or `htpasswd` command
-6. Upload your existing `refs.bib` to the same directory (or start fresh)
-7. Ensure PHP has write permission on the directory
-8. Visit your subdomain — enter credentials — done
-
-**Requirements:** PHP 7.4+, Apache with `mod_rewrite` and `mod_auth_basic` (standard on all shared hosting)
+1. Search CrossRef for ISBN to find associated DOI
+2. If DOI found and matches publisher pattern (Springer, Elsevier), fetch BibTeX directly — **most authoritative source**
+3. If DOI found but no publisher BibTeX, use CrossRef metadata (includes edition, series, editors)
+4. Fall back to Open Library API if no DOI found
+5. Fall back to Google Books API if Open Library has no data
+6. Return DOI if found (enables DOI-based citekey generation)
 
 ---
 
-## Out of Scope (for now)
+## UI Components
 
-- Per-user edit tracking
-- Real-time collaborative editing (last-write-wins is acceptable for small groups)
-- Full-text PDF attachment storage
-- Citation style formatting / CSL output
+### Modals
+
+| Modal | Trigger | Purpose |
+|-------|---------|---------|
+| Delete Confirmation | Delete button | Confirms entry deletion |
+| Logout Info | Logout button | Explains session lock release |
+| Session Locked | 423 response | Shows who has lock, offers force-unlock |
+| Validation Results | Tools → Validate | Lists LaTeX errors with fix buttons |
+| DOI/ISBN Selection | Find DOI/ISBN buttons | Choose from search results |
+
+### Form Field Visibility
+
+Entry type controls which fields are shown:
+
+| Type | Visible Fields |
+|------|----------------|
+| article | journal, volume, number, pages |
+| book | publisher, isbn, edition |
+| incollection | booktitle, publisher, isbn |
+| inproceedings | booktitle, publisher |
+| phdthesis / mastersthesis | school |
+| misc | howpublished, eprint |
+
+---
+
+## Configuration
+
+### Journal Abbreviations
+
+`journal-abbrevs.json` — ~4,700 entries from JabRef database
+`journal-abbrevs-custom.json` — User overrides (loaded second, takes precedence)
+
+```json
+{
+  "journal of magnetic resonance": "J. Magn. Reson.",
+  "the journal of chemical physics": "J. Chem. Phys."
+}
+```
+
+### Protected Names
+
+`proper-names.json` — Categories: scientists, institutions, algorithms, materials
+`proper-names-custom.json` — Custom additions
+
+Names in these lists are wrapped in braces to protect capitalization in BibTeX.
+
+---
+
+## Development
+
+### Local Setup
+
+```bash
+cd public && php -S localhost:8000
+```
+
+Auth is bypassed when running locally (no `.htaccess` enforcement).
+
+### File Sizes
+
+| File | Lines |
+|------|-------|
+| app.js | ~3,950 |
+| api.php | ~2,560 |
+| index.html | ~350 |
+| style.css | ~800 |
+
+---
+
+## Limitations
+
+- Single-user access (session lock prevents conflicts)
+- No PDF attachments — metadata only
+- No real-time collaboration
+- Upstream metadata quality varies — manual review recommended
 - Automatic git commit on save (can be added later via shell_exec if SSH available)
 
 ---

@@ -2150,19 +2150,209 @@ function handleRequest(): void {
                 $context = stream_context_create([
                     'http' => [
                         'method' => 'GET',
-                        'header' => "Accept: application/json\r\nUser-Agent: BibTeXManager/1.0\r\n",
+                        'header' => "Accept: application/json\r\nUser-Agent: BibTeXManager/1.0 (mailto:user@example.com)\r\n",
                         'timeout' => 15
                     ]
                 ]);
                 
                 $work = null;
                 $cleanIsbn = $isbn;
+                $foundDoi = null;
+                $source = 'unknown';
                 
-                // Try Open Library API first
-                $url = "https://openlibrary.org/api/books?bibkeys=ISBN:{$isbn}&format=json&jscmd=data";
-                $response = @file_get_contents($url, false, $context);
+                // Step 1: Try to find DOI for this ISBN via CrossRef
+                $crossrefUrl = "https://api.crossref.org/works?query.bibliographic=" . urlencode($isbn) . "&filter=isbn:" . urlencode($isbn) . "&rows=1";
+                $crossrefResponse = @file_get_contents($crossrefUrl, false, $context);
                 
-                if ($response !== false) {
+                if ($crossrefResponse !== false) {
+                    $crossrefData = json_decode($crossrefResponse, true);
+                    if ($crossrefData && isset($crossrefData['message']['items'][0])) {
+                        $item = $crossrefData['message']['items'][0];
+                        // Verify this result actually has our ISBN
+                        $isbns = $item['ISBN'] ?? [];
+                        $isbnMatch = false;
+                        foreach ($isbns as $resultIsbn) {
+                            $cleanResultIsbn = preg_replace('/[^0-9Xx]/', '', $resultIsbn);
+                            if ($cleanResultIsbn === $isbn) {
+                                $isbnMatch = true;
+                                break;
+                            }
+                        }
+                        if ($isbnMatch && isset($item['DOI'])) {
+                            $foundDoi = $item['DOI'];
+                        }
+                    }
+                }
+                
+                // Step 2: If DOI found, try publisher BibTeX first
+                if ($foundDoi) {
+                    $bibtex = null;
+                    $bibtexSource = null;
+                    
+                    // Try Springer (10.1007/)
+                    if (strpos($foundDoi, '10.1007/') === 0) {
+                        $url = "https://citation-needed.springer.com/v2/references/" . urlencode($foundDoi) . "?format=bibtex";
+                        $ch = curl_init();
+                        curl_setopt_array($ch, [
+                            CURLOPT_URL => $url,
+                            CURLOPT_RETURNTRANSFER => true,
+                            CURLOPT_TIMEOUT => 10,
+                            CURLOPT_FOLLOWLOCATION => true,
+                            CURLOPT_HTTPHEADER => [
+                                'Accept: text/plain, */*',
+                                'User-Agent: BibTeX-Manager/1.0'
+                            ]
+                        ]);
+                        $response = curl_exec($ch);
+                        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        curl_close($ch);
+                        
+                        if ($httpCode === 200 && strpos($response, '@') === 0) {
+                            $bibtex = $response;
+                            $bibtexSource = 'springer';
+                        }
+                    }
+                    
+                    // Try Elsevier (10.1016/) - only for book chapters (B prefix)
+                    // ScienceDirect citation export only works for B-prefix PIIs (book chapters)
+                    // C-prefix (complete books) and article DOIs are not supported
+                    if (!$bibtex && strpos($foundDoi, '10.1016/') === 0) {
+                        $suffix = substr($foundDoi, 8);
+                        // Only attempt for book chapters (B978-...)
+                        if (preg_match('/^[Bb]\d/', $suffix)) {
+                            // Book chapter: remove -, ., and ()
+                            $pii = preg_replace('/[-().]+/', '', $suffix);
+                            $pii = strtoupper(substr($pii, 0, 1)) . substr($pii, 1);
+                            
+                            $url = "https://www.sciencedirect.com/sdfe/arp/cite?pii={$pii}&format=text/x-bibtex&withabstract=true";
+                            $ch = curl_init();
+                            curl_setopt_array($ch, [
+                                CURLOPT_URL => $url,
+                                CURLOPT_RETURNTRANSFER => true,
+                                CURLOPT_TIMEOUT => 10,
+                                CURLOPT_FOLLOWLOCATION => true,
+                                CURLOPT_HTTPHEADER => [
+                                    'Accept: text/plain, */*',
+                                    'User-Agent: BibTeX-Manager/1.0'
+                                ]
+                            ]);
+                            $response = curl_exec($ch);
+                            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                            curl_close($ch);
+                            
+                            if ($httpCode === 200 && strpos($response, '@') === 0) {
+                                $bibtex = $response;
+                                $bibtexSource = 'elsevier';
+                            }
+                        }
+                        // C-prefix (complete books) and article DOIs fall through to CrossRef
+                    }
+                    
+                    // Parse publisher BibTeX if we got it
+                    if ($bibtex) {
+                        $parsedEntries = BibTeXParser::parse($bibtex);
+                        if (!empty($parsedEntries)) {
+                            $entry = $parsedEntries[0];
+                            $fields = $entry['fields'];
+                            
+                            // Extract authors
+                            $authors = [];
+                            if (isset($fields['author'])) {
+                                $authorParts = preg_split('/\s+and\s+/i', $fields['author']);
+                                foreach ($authorParts as $author) {
+                                    $authors[] = trim($author);
+                                }
+                            }
+                            
+                            // Get best ISBN
+                            $bookIsbn = $fields['isbn'] ?? $isbn;
+                            $cleanIsbn = preg_replace('/[^0-9Xx-]/', '', $bookIsbn);
+                            
+                            $work = [
+                                'title' => $fields['title'] ?? null,
+                                'author' => $authors,
+                                'year' => $fields['year'] ?? null,
+                                'publisher' => $fields['publisher'] ?? null,
+                                'isbn' => $cleanIsbn,
+                                'doi' => $foundDoi,
+                                'pages' => $fields['pages'] ?? null,
+                                'edition' => $fields['edition'] ?? null,
+                                'editor' => $fields['editor'] ?? null,
+                                'booktitle' => $fields['booktitle'] ?? null,
+                                'series' => $fields['series'] ?? null
+                            ];
+                            $source = $bibtexSource;
+                        }
+                    }
+                    
+                    // If no publisher BibTeX, use CrossRef data directly
+                    if (!$work && $crossrefResponse !== false) {
+                        $crossrefData = json_decode($crossrefResponse, true);
+                        if ($crossrefData && isset($crossrefData['message']['items'][0])) {
+                            $item = $crossrefData['message']['items'][0];
+                            
+                            // Extract authors
+                            $authors = [];
+                            if (isset($item['author'])) {
+                                foreach ($item['author'] as $a) {
+                                    if (isset($a['family']) && isset($a['given'])) {
+                                        $authors[] = $a['family'] . ', ' . $a['given'];
+                                    } elseif (isset($a['family'])) {
+                                        $authors[] = $a['family'];
+                                    } elseif (isset($a['name'])) {
+                                        $authors[] = $a['name'];
+                                    }
+                                }
+                            }
+                            
+                            // Extract editors
+                            $editors = [];
+                            if (isset($item['editor'])) {
+                                foreach ($item['editor'] as $e) {
+                                    if (isset($e['family']) && isset($e['given'])) {
+                                        $editors[] = $e['family'] . ', ' . $e['given'];
+                                    } elseif (isset($e['family'])) {
+                                        $editors[] = $e['family'];
+                                    }
+                                }
+                            }
+                            
+                            // Get year
+                            $year = null;
+                            if (isset($item['published']['date-parts'][0][0])) {
+                                $year = (string)$item['published']['date-parts'][0][0];
+                            } elseif (isset($item['issued']['date-parts'][0][0])) {
+                                $year = (string)$item['issued']['date-parts'][0][0];
+                            }
+                            
+                            // Get best ISBN
+                            $bookIsbn = $item['ISBN'][0] ?? $isbn;
+                            $cleanIsbn = preg_replace('/[^0-9Xx-]/', '', $bookIsbn);
+                            
+                            $work = [
+                                'title' => $item['title'][0] ?? null,
+                                'author' => $authors,
+                                'year' => $year,
+                                'publisher' => $item['publisher'] ?? null,
+                                'isbn' => $cleanIsbn,
+                                'doi' => $foundDoi,
+                                'pages' => $item['page'] ?? null,
+                                'edition' => $item['edition-number'] ?? null,
+                                'editor' => !empty($editors) ? implode(' and ', $editors) : null,
+                                'booktitle' => $item['container-title'][0] ?? null,
+                                'series' => $item['collection-title'][0] ?? null
+                            ];
+                            $source = 'crossref';
+                        }
+                    }
+                }
+                
+                // Step 3: Fall back to Open Library if no DOI or DOI lookup failed
+                if (!$work) {
+                    $url = "https://openlibrary.org/api/books?bibkeys=ISBN:{$isbn}&format=json&jscmd=data";
+                    $response = @file_get_contents($url, false, $context);
+                    
+                    if ($response !== false) {
                     $data = json_decode($response, true);
                     $key = "ISBN:{$isbn}";
                     
@@ -2198,7 +2388,9 @@ function handleRequest(): void {
                             'isbn' => $cleanIsbn,
                             'pages' => $book['number_of_pages'] ?? null
                         ];
+                        $source = 'openlibrary';
                     }
+                }
                 }
                 
                 // Fallback to Google Books API if Open Library didn't have it
@@ -2241,12 +2433,13 @@ function handleRequest(): void {
                                 'isbn' => $cleanIsbn,
                                 'pages' => $info['pageCount'] ?? null
                             ];
+                            $source = 'googlebooks';
                         }
                     }
                 }
                 
                 if (!$work) {
-                    errorResponse('ISBN not found in Open Library or Google Books');
+                    errorResponse('ISBN not found via CrossRef, Open Library, or Google Books');
                 }
                 
                 // Format ISBN with hyphens (basic formatting for ISBN-13)
@@ -2259,7 +2452,7 @@ function handleRequest(): void {
                     $work['isbn'] = $cleanIsbn;
                 }
                 
-                jsonResponse(['work' => $work, 'isbn' => $cleanIsbn]);
+                jsonResponse(['work' => $work, 'isbn' => $cleanIsbn, 'source' => $source, 'doi' => $foundDoi]);
                 break;
             
             case 'deduplicate_rekey':
@@ -2362,32 +2555,38 @@ function handleRequest(): void {
                 $source = null;
                 
                 // Elsevier/ScienceDirect (DOIs starting with 10.1016/)
+                // ScienceDirect citation export only works for B-prefix PIIs (book chapters)
+                // C-prefix (complete books) and article DOIs are not supported
                 if (strpos($doi, '10.1016/') === 0) {
                     $suffix = substr($doi, 8); // Remove "10.1016/"
-                    // Convert DOI suffix to PII: remove dashes and parentheses, uppercase first char
-                    $pii = preg_replace('/[-()]/', '', $suffix);
-                    $pii = strtoupper(substr($pii, 0, 1)) . substr($pii, 1);
-                    
-                    $url = "https://www.sciencedirect.com/sdfe/arp/cite?pii={$pii}&format=text/x-bibtex&withabstract=true";
-                    
-                    $ch = curl_init();
-                    curl_setopt_array($ch, [
-                        CURLOPT_URL => $url,
-                        CURLOPT_RETURNTRANSFER => true,
-                        CURLOPT_TIMEOUT => 10,
-                        CURLOPT_FOLLOWLOCATION => true,
-                        CURLOPT_HTTPHEADER => [
-                            'Accept: text/plain, */*',
-                            'User-Agent: BibTeX-Manager/1.0'
-                        ]
-                    ]);
-                    $response = curl_exec($ch);
-                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                    
-                    if ($httpCode === 200 && strpos($response, '@') === 0) {
-                        $bibtex = $response;
-                        $source = 'sciencedirect';
+                    // Only attempt for book chapters (B978-...)
+                    if (preg_match('/^[Bb]\d/', $suffix)) {
+                        // Book chapter: remove -, ., and ()
+                        $pii = preg_replace('/[-().]+/', '', $suffix);
+                        $pii = strtoupper(substr($pii, 0, 1)) . substr($pii, 1);
+                        
+                        $url = "https://www.sciencedirect.com/sdfe/arp/cite?pii={$pii}&format=text/x-bibtex&withabstract=true";
+                        
+                        $ch = curl_init();
+                        curl_setopt_array($ch, [
+                            CURLOPT_URL => $url,
+                            CURLOPT_RETURNTRANSFER => true,
+                            CURLOPT_TIMEOUT => 10,
+                            CURLOPT_FOLLOWLOCATION => true,
+                            CURLOPT_HTTPHEADER => [
+                                'Accept: text/plain, */*',
+                                'User-Agent: BibTeX-Manager/1.0'
+                            ]
+                        ]);
+                        $response = curl_exec($ch);
+                        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        
+                        if ($httpCode === 200 && strpos($response, '@') === 0) {
+                            $bibtex = $response;
+                            $source = 'sciencedirect';
+                        }
                     }
+                    // C-prefix (complete books) and article DOIs are not supported by this API
                 }
                 
                 // Springer (DOIs starting with 10.1007/)
