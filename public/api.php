@@ -311,6 +311,200 @@ class BibTeXParser {
 }
 
 /**
+ * RIS Parser Class
+ * Converts RIS format to BibTeX for publishers that don't provide BibTeX
+ */
+class RisParser {
+    
+    /**
+     * Parse RIS string and convert to BibTeX format
+     * @param string $ris - The RIS content
+     * @return string|null - BibTeX string or null if parsing fails
+     */
+    public static function toBibtex(string $ris): ?string {
+        $lines = preg_split('/\r?\n/', $ris);
+        $fields = [];
+        $currentTag = null;
+        $currentValue = '';
+        
+        foreach ($lines as $line) {
+            // RIS lines are formatted as: TAG  - Value
+            if (preg_match('/^([A-Z][A-Z0-9])\s+-\s*(.*)$/', $line, $matches)) {
+                // Save previous tag if exists
+                if ($currentTag !== null) {
+                    if (!isset($fields[$currentTag])) {
+                        $fields[$currentTag] = [];
+                    }
+                    $fields[$currentTag][] = trim($currentValue);
+                }
+                $currentTag = $matches[1];
+                $currentValue = $matches[2];
+            } elseif ($currentTag !== null && trim($line) !== '') {
+                // Continuation line
+                $currentValue .= ' ' . trim($line);
+            }
+        }
+        
+        // Save last tag
+        if ($currentTag !== null) {
+            if (!isset($fields[$currentTag])) {
+                $fields[$currentTag] = [];
+            }
+            $fields[$currentTag][] = trim($currentValue);
+        }
+        
+        if (empty($fields)) {
+            return null;
+        }
+        
+        // Map RIS type to BibTeX type
+        $typeMap = [
+            'JOUR' => 'article',
+            'BOOK' => 'book',
+            'CHAP' => 'incollection',
+            'CONF' => 'inproceedings',
+            'THES' => 'phdthesis',
+            'RPRT' => 'techreport',
+            'MGZN' => 'article',
+            'NEWS' => 'article',
+            'ELEC' => 'misc',
+            'GEN' => 'misc'
+        ];
+        
+        $risType = $fields['TY'][0] ?? 'JOUR';
+        $bibType = $typeMap[$risType] ?? 'article';
+        
+        // Build BibTeX fields
+        $bibFields = [];
+        
+        // Authors (AU tags)
+        if (isset($fields['AU'])) {
+            $authors = [];
+            foreach ($fields['AU'] as $author) {
+                // RIS authors are typically "Last, First" - keep as is for BibTeX
+                $authors[] = trim($author);
+            }
+            $bibFields['author'] = implode(' and ', $authors);
+        }
+        
+        // Title
+        if (isset($fields['TI'])) {
+            $bibFields['title'] = $fields['TI'][0];
+        } elseif (isset($fields['T1'])) {
+            $bibFields['title'] = $fields['T1'][0];
+        }
+        
+        // Journal
+        if (isset($fields['JO'])) {
+            $bibFields['journal'] = $fields['JO'][0];
+        } elseif (isset($fields['JF'])) {
+            $bibFields['journal'] = $fields['JF'][0];
+        } elseif (isset($fields['T2'])) {
+            // T2 can be journal for articles or book title for chapters
+            if ($bibType === 'article') {
+                $bibFields['journal'] = $fields['T2'][0];
+            } else {
+                $bibFields['booktitle'] = $fields['T2'][0];
+            }
+        }
+        
+        // Year
+        if (isset($fields['PY'])) {
+            // PY can be "YYYY" or "YYYY/MM/DD" or "YYYY/MM/DD/"
+            $year = $fields['PY'][0];
+            if (preg_match('/^(\d{4})/', $year, $m)) {
+                $bibFields['year'] = $m[1];
+            }
+        } elseif (isset($fields['Y1'])) {
+            $year = $fields['Y1'][0];
+            if (preg_match('/^(\d{4})/', $year, $m)) {
+                $bibFields['year'] = $m[1];
+            }
+        } elseif (isset($fields['DA'])) {
+            $year = $fields['DA'][0];
+            if (preg_match('/^(\d{4})/', $year, $m)) {
+                $bibFields['year'] = $m[1];
+            }
+        }
+        
+        // Volume
+        if (isset($fields['VL'])) {
+            $bibFields['volume'] = $fields['VL'][0];
+        }
+        
+        // Issue/Number
+        if (isset($fields['IS'])) {
+            $bibFields['number'] = $fields['IS'][0];
+        }
+        
+        // Pages
+        $startPage = $fields['SP'][0] ?? null;
+        $endPage = $fields['EP'][0] ?? null;
+        if ($startPage && $endPage) {
+            $bibFields['pages'] = "{$startPage}-{$endPage}";
+        } elseif ($startPage) {
+            $bibFields['pages'] = $startPage;
+        }
+        
+        // DOI
+        if (isset($fields['DO'])) {
+            $doi = $fields['DO'][0];
+            // Remove URL prefix if present
+            $doi = preg_replace('/^https?:\/\/doi\.org\//', '', $doi);
+            $bibFields['doi'] = $doi;
+        }
+        
+        // Publisher
+        if (isset($fields['PB'])) {
+            $bibFields['publisher'] = $fields['PB'][0];
+        }
+        
+        // ISBN
+        if (isset($fields['SN'])) {
+            $sn = $fields['SN'][0];
+            // Could be ISBN or ISSN - ISBN has dashes and different format
+            if (preg_match('/^[\d-]{10,17}$/', preg_replace('/[^0-9-]/', '', $sn))) {
+                $bibFields['isbn'] = $sn;
+            } else {
+                $bibFields['issn'] = $sn;
+            }
+        }
+        
+        // Abstract
+        if (isset($fields['AB'])) {
+            $bibFields['abstract'] = $fields['AB'][0];
+        } elseif (isset($fields['N2'])) {
+            $bibFields['abstract'] = $fields['N2'][0];
+        }
+        
+        // URL
+        if (isset($fields['UR'])) {
+            $bibFields['url'] = $fields['UR'][0];
+        }
+        
+        // Keywords
+        if (isset($fields['KW'])) {
+            $bibFields['keywords'] = implode(', ', $fields['KW']);
+        }
+        
+        // Generate a temporary citekey
+        $citekey = 'temp_' . time();
+        
+        // Build BibTeX string
+        $bibtex = "@{$bibType}{{$citekey},\n";
+        foreach ($bibFields as $field => $value) {
+            // Escape special LaTeX characters that could cause problems
+            // & needs escaping in LaTeX, # is for string concatenation in BibTeX
+            $value = preg_replace('/(?<!\\\\)&/', '\\&', $value);
+            $bibtex .= "  {$field} = {{$value}},\n";
+        }
+        $bibtex = rtrim($bibtex, ",\n") . "\n}";
+        
+        return $bibtex;
+    }
+}
+
+/**
  * Normalize a title for comparison (deduplication)
  */
 function normalizeTitle(string $title): string {
@@ -2189,9 +2383,9 @@ function handleRequest(): void {
                     $bibtex = null;
                     $bibtexSource = null;
                     
-                    // Try Springer (10.1007/)
+                    // Try Springer (10.1007/) - don't urlencode, API doesn't accept encoded slashes
                     if (strpos($foundDoi, '10.1007/') === 0) {
-                        $url = "https://citation-needed.springer.com/v2/references/" . urlencode($foundDoi) . "?format=bibtex";
+                        $url = "https://citation-needed.springer.com/v2/references/{$foundDoi}?format=bibtex";
                         $ch = curl_init();
                         curl_setopt_array($ch, [
                             CURLOPT_URL => $url,
@@ -2205,7 +2399,6 @@ function handleRequest(): void {
                         ]);
                         $response = curl_exec($ch);
                         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                        curl_close($ch);
                         
                         if ($httpCode === 200 && strpos($response, '@') === 0) {
                             $bibtex = $response;
@@ -2238,7 +2431,6 @@ function handleRequest(): void {
                             ]);
                             $response = curl_exec($ch);
                             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                            curl_close($ch);
                             
                             if ($httpCode === 200 && strpos($response, '@') === 0) {
                                 $bibtex = $response;
@@ -2591,7 +2783,8 @@ function handleRequest(): void {
                 
                 // Springer (DOIs starting with 10.1007/)
                 if (!$bibtex && strpos($doi, '10.1007/') === 0) {
-                    $url = "https://citation-needed.springer.com/v2/references/" . urlencode($doi) . "?format=bibtex";
+                    // Try BibTeX first (don't urlencode - Springer API doesn't accept encoded slashes)
+                    $url = "https://citation-needed.springer.com/v2/references/{$doi}?format=bibtex";
                     
                     $ch = curl_init();
                     curl_setopt_array($ch, [
@@ -2610,12 +2803,39 @@ function handleRequest(): void {
                     if ($httpCode === 200 && strpos($response, '@') === 0) {
                         $bibtex = $response;
                         $source = 'springer';
+                    } else {
+                        // BibTeX not available, try RIS format (refman with citation flavour includes abstract)
+                        $risUrl = "https://citation-needed.springer.com/v2/references/{$doi}?format=refman&flavour=citation";
+                        
+                        $ch = curl_init();
+                        curl_setopt_array($ch, [
+                            CURLOPT_URL => $risUrl,
+                            CURLOPT_RETURNTRANSFER => true,
+                            CURLOPT_TIMEOUT => 10,
+                            CURLOPT_FOLLOWLOCATION => true,
+                            CURLOPT_HTTPHEADER => [
+                                'Accept: text/plain, */*',
+                                'User-Agent: BibTeX-Manager/1.0'
+                            ]
+                        ]);
+                        $risResponse = curl_exec($ch);
+                        $risHttpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        
+                        if ($risHttpCode === 200 && preg_match('/^TY\s+-/', $risResponse)) {
+                            // Convert RIS to BibTeX
+                            $convertedBibtex = RisParser::toBibtex($risResponse);
+                            if ($convertedBibtex) {
+                                $bibtex = $convertedBibtex;
+                                $source = 'springer-ris';
+                            }
+                        }
                     }
                 }
                 
                 // Nature (DOIs starting with 10.1038/)
                 if (!$bibtex && strpos($doi, '10.1038/') === 0) {
-                    $url = "https://citation-needed.springer.com/v2/references/" . urlencode($doi) . "?format=bibtex";
+                    // Try BibTeX first (don't urlencode - Springer API doesn't accept encoded slashes)
+                    $url = "https://citation-needed.springer.com/v2/references/{$doi}?format=bibtex";
                     
                     $ch = curl_init();
                     curl_setopt_array($ch, [
@@ -2634,6 +2854,81 @@ function handleRequest(): void {
                     if ($httpCode === 200 && strpos($response, '@') === 0) {
                         $bibtex = $response;
                         $source = 'springer';
+                    } else {
+                        // BibTeX not available, try RIS format (refman with citation flavour includes abstract)
+                        $risUrl = "https://citation-needed.springer.com/v2/references/{$doi}?format=refman&flavour=citation";
+                        
+                        $ch = curl_init();
+                        curl_setopt_array($ch, [
+                            CURLOPT_URL => $risUrl,
+                            CURLOPT_RETURNTRANSFER => true,
+                            CURLOPT_TIMEOUT => 10,
+                            CURLOPT_FOLLOWLOCATION => true,
+                            CURLOPT_HTTPHEADER => [
+                                'Accept: text/plain, */*',
+                                'User-Agent: BibTeX-Manager/1.0'
+                            ]
+                        ]);
+                        $risResponse = curl_exec($ch);
+                        $risHttpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        
+                        if ($risHttpCode === 200 && preg_match('/^TY\s+-/', $risResponse)) {
+                            // Convert RIS to BibTeX
+                            $convertedBibtex = RisParser::toBibtex($risResponse);
+                            if ($convertedBibtex) {
+                                $bibtex = $convertedBibtex;
+                                $source = 'springer-ris';
+                            }
+                        }
+                    }
+                }
+                
+                // Universal fallback: DOI content negotiation
+                // This works for most DOIs and handles cases where publisher-specific APIs fail
+                if (!$bibtex) {
+                    // Try BibTeX first via DOI content negotiation
+                    $doiUrl = "https://doi.org/" . urlencode($doi);
+                    
+                    $ch = curl_init();
+                    curl_setopt_array($ch, [
+                        CURLOPT_URL => $doiUrl,
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_TIMEOUT => 10,
+                        CURLOPT_FOLLOWLOCATION => true,
+                        CURLOPT_HTTPHEADER => [
+                            'Accept: application/x-bibtex',
+                            'User-Agent: BibTeX-Manager/1.0'
+                        ]
+                    ]);
+                    $response = curl_exec($ch);
+                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    
+                    if ($httpCode === 200 && strpos(trim($response), '@') === 0) {
+                        $bibtex = $response;
+                        $source = 'doi-content-negotiation';
+                    } else {
+                        // Try RIS via DOI content negotiation as last resort
+                        $ch = curl_init();
+                        curl_setopt_array($ch, [
+                            CURLOPT_URL => $doiUrl,
+                            CURLOPT_RETURNTRANSFER => true,
+                            CURLOPT_TIMEOUT => 10,
+                            CURLOPT_FOLLOWLOCATION => true,
+                            CURLOPT_HTTPHEADER => [
+                                'Accept: application/x-research-info-systems',
+                                'User-Agent: BibTeX-Manager/1.0'
+                            ]
+                        ]);
+                        $risResponse = curl_exec($ch);
+                        $risHttpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        
+                        if ($risHttpCode === 200 && preg_match('/^TY\s+-/', trim($risResponse))) {
+                            $convertedBibtex = RisParser::toBibtex($risResponse);
+                            if ($convertedBibtex) {
+                                $bibtex = $convertedBibtex;
+                                $source = 'doi-ris';
+                            }
+                        }
                     }
                 }
                 

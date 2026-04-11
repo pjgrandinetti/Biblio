@@ -192,6 +192,52 @@
         if (!text) return text;
         let result = text;
         
+        // Convert Unicode Greek letters to LaTeX (in math mode)
+        const greekMap = {
+            // Lowercase Greek
+            'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma', 'δ': '\\delta',
+            'ε': '\\varepsilon', 'ζ': '\\zeta', 'η': '\\eta', 'θ': '\\theta',
+            'ι': '\\iota', 'κ': '\\kappa', 'λ': '\\lambda', 'μ': '\\mu',
+            'ν': '\\nu', 'ξ': '\\xi', 'π': '\\pi', 'ρ': '\\rho',
+            'σ': '\\sigma', 'ς': '\\sigma', 'τ': '\\tau', 'υ': '\\upsilon',
+            'φ': '\\varphi', 'χ': '\\chi', 'ψ': '\\psi', 'ω': '\\omega',
+            // Capital Greek (only those different from Latin)
+            'Γ': '\\Gamma', 'Δ': '\\Delta', 'Θ': '\\Theta', 'Λ': '\\Lambda',
+            'Ξ': '\\Xi', 'Π': '\\Pi', 'Σ': '\\Sigma', 'Υ': '\\Upsilon',
+            'Φ': '\\Phi', 'Ψ': '\\Psi', 'Ω': '\\Omega'
+        };
+        
+        // Replace Greek letters, wrapping in math mode
+        // Build one regex to match all Greek letters
+        const greekPattern = new RegExp('([' + Object.keys(greekMap).join('') + '])', 'g');
+        result = result.replace(greekPattern, (match) => `$${greekMap[match]}$`);
+        
+        // Merge adjacent math modes: $\alpha$$\beta$ -> $\alpha\beta$
+        result = result.replace(/\$\$/g, '');
+        
+        // Convert physics/NMR tensor notation: Vzz, Vyy, Vxx -> V_{zz}, V_{yy}, V_{xx}
+        result = result.replace(/\b(V)(xx|yy|zz|xy|xz|yz)\b/g, (match, base, subscript) => {
+            return `{$${base}_{${subscript}}$}`;
+        });
+        
+        // Convert Cq (quadrupolar coupling constant) notation
+        result = result.replace(/\b(C)(q|Q)\b/g, (match, base, subscript) => {
+            return `{$${base}_{${subscript.toLowerCase()}}$}`;
+        });
+        
+        // Consolidate parenthesized expressions with multiple $...$ into single math mode
+        // e.g., ({$V_{zz}$}, $\eta$) -> {$(V_{zz}, \eta)$}
+        result = result.replace(/\(([^()]*\$[^()]+\$[^()]*)\)/g, (match, inner) => {
+            // Check if there are multiple $ sections or Greek letters
+            if (inner.includes('$')) {
+                // Remove the individual $ wrappers and create one unified math expression
+                let mathContent = inner.replace(/\{\$([^$]+)\$\}/g, '$1')  // {$...$} -> ...
+                                        .replace(/\$([^$]+)\$/g, '$1');      // $...$ -> ...
+                return `{$(${mathContent})$}`;
+            }
+            return match;
+        });
+        
         // Convert MathML isotope notation (from CrossRef) to LaTeX
         // Pattern: <mml:math...><mml:mmultiscripts><mml:mi...>ELEMENT</mml:mi><mml:mprescripts/><mml:none/><mml:mn>MASS</mml:mn></mml:mmultiscripts></mml:math>
         result = result.replace(/<mml:math[^>]*><mml:mmultiscripts><mml:mi[^>]*>([A-Za-z]+)<\/mml:mi><mml:mprescripts\/?><mml:none\/?><mml:mn>(\d+)<\/mml:mn><\/mml:mmultiscripts><\/mml:math>/gi,
