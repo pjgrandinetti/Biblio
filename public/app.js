@@ -799,9 +799,9 @@
                 return `
                 <tr data-citekey="${escapeHtml(entry.citekey)}">
                     <td class="cell-citekey clickable" title="${escapeHtml(entry.citekey)}">${escapeHtml(entry.citekey)}</td>
-                    <td class="cell-authors" title="${escapeHtml(entry.fields.author || '')}">${escapeHtml(truncate(entry.fields.author, 40))}</td>
-                    <td class="cell-title">${titleHtml}</td>
-                    <td class="cell-year">${escapeHtml(entry.fields.year || '')}</td>
+                    <td class="cell-authors" title="${escapeHtml(entry.fields.author || '')}">${entry.fields.author ? escapeHtml(truncate(entry.fields.author, 40)) : '<span class="field-empty">—</span>'}</td>
+                    <td class="cell-title">${entry.fields.title ? titleHtml : '<span class="field-empty">—</span>'}</td>
+                    <td class="cell-year">${entry.fields.year ? escapeHtml(entry.fields.year) : '<span class="field-empty">—</span>'}</td>
                     <td class="cell-type">${escapeHtml(entry.type)}</td>
                 </tr>
             `}).join('');
@@ -1561,11 +1561,11 @@
             return `
                 <div class="doi-result-card${isHighlighted ? ' highlighted' : ''}" data-index="${i}" data-type="isbn">
                     <div class="doi-result-title">
-                        ${escapeHtml(item.title || 'Untitled')}
+                        ${item.title ? escapeHtml(item.title) : '<span class="field-empty">Untitled</span>'}
                         ${isHighlighted ? '<span class="doi-result-badge">Match</span>' : ''}
                         ${sourceTag}
                     </div>
-                    <div class="doi-result-authors">${escapeHtml(item.authors || 'Unknown authors')}</div>
+                    <div class="doi-result-authors">${item.authors ? escapeHtml(item.authors) : '<span class="field-empty">Unknown authors</span>'}</div>
                     <div class="doi-result-meta">${bibParts.join(' ')}</div>
                     <div class="doi-result-doi">ISBN: ${escapeHtml(item.isbn)}</div>
                 </div>
@@ -1630,11 +1630,11 @@
             return `
                 <div class="doi-result-card${isHighlighted ? ' highlighted' : ''}" data-index="${i}">
                     <div class="doi-result-title">
-                        ${escapeHtml(cleanTitle)}
+                        ${item.title ? escapeHtml(cleanTitle) : '<span class="field-empty">Untitled</span>'}
                         ${isHighlighted ? '<span class="doi-result-badge">Match</span>' : ''}
                         ${sourceTag}
                     </div>
-                    <div class="doi-result-authors">${escapeHtml(item.authors || 'Unknown authors')}</div>
+                    <div class="doi-result-authors">${item.authors ? escapeHtml(item.authors) : '<span class="field-empty">Unknown authors</span>'}</div>
                     <div class="doi-result-meta">${bibParts.join(' ')}</div>
                     <div class="doi-result-doi">${escapeHtml(item.doi)}</div>
                 </div>
